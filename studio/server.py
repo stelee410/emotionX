@@ -66,6 +66,24 @@ EXPORTS = ROOT / "data" / "exports"
 app = FastAPI(title="emotionX 平台", docs_url="/api/docs")
 
 _db = PlatformDB()
+
+SEED_POOL = ROOT / "data" / "raw" / "seed_pool.jsonl"
+
+
+def _autoload_seed(db_obj: PlatformDB) -> None:
+    """首次启动时把种子样例灌进去 —— 空库的标注面板没法用，也看不出该怎么用。"""
+    if db_obj.stats()["items"] or not SEED_POOL.exists():
+        return
+    records = [
+        json.loads(line)
+        for line in SEED_POOL.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    r = db_obj.import_records(records, source="seed")
+    print(f"首次启动：已载入 {r['added']} 条种子样例（source=seed，不会进评估集）")
+
+
+_autoload_seed(_db)
 _memory = ManualMemory()
 _pipeline = AffectPipeline(memory=_memory)
 _pipeline.tracer.enabled = False
@@ -465,19 +483,131 @@ def guideline() -> str:
     return p.read_text(encoding="utf-8") if p.exists() else "（缺少标注指南）"
 
 
-# =========================================================== 训练
-JOB_COMMANDS: dict[str, list[str]] = {
-    "stage1": [sys.executable, "training/stage1_pretrain.py", "--datasets", "ewect", "--epochs", "3"],
-    "stage2": [sys.executable, "training/stage2_finetune.py", "--stage1", "artifacts/l1_stage1"],
-    "export": [sys.executable, "training/export_onnx.py", "--model-dir", "artifacts/l1_stage2"],
-    "eval": [sys.executable, "eval/test_perception.py", "--heuristic"],
-    "counterfactual": [sys.executable, "eval/run_counterfactual.py", "-v"],
+# =========================================================== 数据集
+DATASET_INFO: dict[str, dict[str, Any]] = {
+    "ewect": {
+        "label": "SMP2020-EWECT",
+        "detail": "微博 6 类情感，训练集 27,766 条。HuggingFace 直接下载。",
+        "auto": True,
+        "recommended": True,
+    },
+    "simplifyweibo": {
+        "label": "simplifyweibo_4_moods",
+        "detail": "微博 4 类，下采样 4 万条。标签噪声较大 —— 实测加进来会让 EWECT 掉 0.7 个点。",
+        "auto": True,
+        "recommended": False,
+    },
+    "cped": {
+        "label": "CPED",
+        "detail": "对话数据，13 类细粒度情感。域最接近，但需手动申请：github.com/scutcyr/CPED",
+        "auto": False,
+        "recommended": True,
+    },
+    "m3ed": {
+        "label": "M3ED",
+        "detail": "对话数据 24,449 句 7 类。只用文本模态。需手动获取：github.com/AIM3-RUC/RUCM3ED",
+        "auto": False,
+        "recommended": True,
+    },
+    "ocemotion": {
+        "label": "OCEMOTION",
+        "detail": "约 3.5 万条 7 类。天池赛题，需手动下载后放到 data/raw/ocemotion/train.csv",
+        "auto": False,
+        "recommended": False,
+    },
 }
 
 
-class JobPayload(BaseModel):
-    kind: str
-    extra_args: list[str] = Field(default_factory=list)
+@app.get("/api/datasets")
+def datasets() -> dict[str, Any]:
+    from training.datasets.registry import RAW_DIR
+
+    out = []
+    for key, info in DATASET_INFO.items():
+        d = RAW_DIR / key
+        present = d.exists() and any(d.iterdir())
+        out.append(
+            {
+                "key": key,
+                **info,
+                "present": present,
+                "path": str(d),
+                "status": "已就绪" if present else ("首次运行自动下载" if info["auto"] else "需手动获取"),
+                "usable": present or info["auto"],
+            }
+        )
+    exports = sorted(str(f.name) for f in EXPORTS.glob("*.jsonl")) if EXPORTS.exists() else []
+    models = (
+        sorted(d.name for d in (ROOT / "artifacts").iterdir() if d.is_dir())
+        if (ROOT / "artifacts").exists()
+        else []
+    )
+    return {"datasets": out, "annotation_exports": exports, "artifacts": models}
+
+
+# =========================================================== 训练
+def _build_command(kind: str, cfg: dict[str, Any]) -> list[str]:
+    """把面板上的配置翻译成命令行。
+
+    刻意不接受自由文本参数 —— 让人背命令行参数是这个面板存在的反面。
+    """
+    py = sys.executable
+    if kind == "stage1":
+        ds = cfg.get("datasets") or ["ewect"]
+        cmd = [py, "training/stage1_pretrain.py", "--datasets", *ds,
+               "--epochs", str(cfg.get("epochs", 3)),
+               "--batch-size", str(cfg.get("batch_size", 64)),
+               "--lr", str(cfg.get("lr", 5e-5))]
+        if cfg.get("max_per_dataset"):
+            cmd += ["--max-per-dataset", str(cfg["max_per_dataset"])]
+        if cfg.get("out"):
+            cmd += ["--out", str(cfg["out"])]
+        return cmd
+
+    if kind == "stage2":
+        cmd = [py, "training/stage2_finetune.py",
+               "--stage1", str(cfg.get("stage1", "artifacts/l1_stage1")),
+               "--epochs", str(cfg.get("epochs", 3)),
+               "--lr", str(cfg.get("lr", 1e-5))]
+        source = cfg.get("source", "bootstrap")
+        if source == "annotations":
+            path = cfg.get("annotations")
+            if not path:
+                raise ValueError("选择了「人工标注」但没有指定文件 —— 先在标注面板导出")
+            cmd += ["--annotations", str(EXPORTS / path if not str(path).startswith("/") else path)]
+        else:
+            cmd += ["--bootstrap", str(cfg.get("bootstrap", 6000))]
+        if cfg.get("distilled"):
+            cmd += ["--distilled", str(cfg["distilled"])]
+        return cmd
+
+    if kind == "export":
+        cmd = [py, "training/export_onnx.py",
+               "--model-dir", str(cfg.get("model_dir", "artifacts/l1_stage2")),
+               "--out", str(cfg.get("out", "artifacts/l1_onnx")),
+               "--bench", str(cfg.get("bench", 200))]
+        if not cfg.get("quantize", True):
+            cmd.append("--no-quantize")
+        return cmd
+
+    if kind == "eval":
+        model = cfg.get("model")
+        if model and model != "heuristic":
+            return [py, "eval/test_perception.py", "--model", str(ROOT / "artifacts" / model)]
+        return [py, "eval/test_perception.py", "--heuristic"]
+
+    if kind == "counterfactual":
+        cmd = [py, "eval/run_counterfactual.py"]
+        if cfg.get("verbose"):
+            cmd.append("-v")
+        if cfg.get("tag"):
+            cmd += ["--tag", str(cfg["tag"])]
+        return cmd
+
+    raise ValueError(f"未知任务 {kind}")
+
+
+JOB_KINDS = ("stage1", "stage2", "export", "eval", "counterfactual")
 
 
 def _run_job(job_id: str, cmd: list[str]) -> None:
@@ -511,16 +641,41 @@ def _run_job(job_id: str, cmd: list[str]) -> None:
             _jobs[job_id]["finished_at"] = time.time()
 
 
+class JobPayload(BaseModel):
+    kind: str
+    # 结构化配置，服务端翻译成命令行。刻意不接受自由文本参数 ——
+    # 让人背命令行参数是这个面板存在的反面。
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/api/train/preview")
+def preview_job(p: JobPayload) -> dict[str, Any]:
+    """把面板配置翻译成命令行给人看 —— 不执行。
+
+    这样既能确认参数没配错，也让人知道该怎么在终端复现同一次训练。
+    """
+    if p.kind not in JOB_KINDS:
+        raise HTTPException(422, f"未知任务 {p.kind}")
+    try:
+        cmd = _build_command(p.kind, p.config)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"command": " ".join(str(c) for c in cmd)}
+
+
 @app.post("/api/train/start")
 def start_job(p: JobPayload) -> dict[str, Any]:
-    if p.kind not in JOB_COMMANDS:
-        raise HTTPException(422, f"未知任务 {p.kind}，可用 {sorted(JOB_COMMANDS)}")
+    if p.kind not in JOB_KINDS:
+        raise HTTPException(422, f"未知任务 {p.kind}，可用 {sorted(JOB_KINDS)}")
+    try:
+        cmd = _build_command(p.kind, p.config)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     with _jobs_lock:
         running = [j for j in _jobs.values() if j["status"] == "running"]
         if running:
             raise HTTPException(409, f"已有任务在跑：{running[0]['kind']}")
         job_id = f"{p.kind}-{int(time.time())}"
-        cmd = [*JOB_COMMANDS[p.kind], *p.extra_args]
         _jobs[job_id] = {
             "id": job_id,
             "kind": p.kind,
@@ -533,7 +688,7 @@ def start_job(p: JobPayload) -> dict[str, Any]:
             "pid": None,
         }
     threading.Thread(target=_run_job, args=(job_id, cmd), daemon=True).start()
-    return {"job_id": job_id}
+    return {"job_id": job_id, "command": " ".join(cmd)}
 
 
 @app.get("/api/train/jobs")
@@ -597,6 +752,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.db:
         _db = PlatformDB(args.db)
+        _autoload_seed(_db)
 
     if args.import_path:
         p = Path(args.import_path)

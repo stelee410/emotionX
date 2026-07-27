@@ -83,6 +83,35 @@ th{color:var(--dim);font-weight:500;font-size:11.5px}
   justify-content:center;text-align:center;min-height:130px}
 .cmp .side:hover{border-color:var(--accent)}
 .cmp .mid{display:flex;flex-direction:column;justify-content:center;gap:8px}
+.intro{background:linear-gradient(180deg,#1a1f2b,#171a21);border:1px solid var(--line);
+  border-left:3px solid var(--accent);border-radius:9px;padding:13px 16px;margin-bottom:14px}
+.intro h2{margin:0 0 6px;font-size:14.5px;font-weight:600}
+.intro p{margin:5px 0;font-size:13px;color:#b8c0d0;line-height:1.7}
+.intro .steps{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
+.intro .steps span{background:var(--panel2);border:1px solid var(--line);border-radius:6px;
+  padding:4px 10px;font-size:12px;color:var(--dim)}
+.intro .steps b{color:var(--accent);font-weight:600}
+.hint{font-size:11.5px;color:#7a8296;line-height:1.6;margin-top:5px}
+.help{display:inline-block;width:14px;height:14px;line-height:14px;text-align:center;
+  border:1px solid var(--line2);border-radius:50%;font-size:10px;color:var(--dim);
+  cursor:help;margin-left:5px;vertical-align:middle}
+details.more{margin-top:8px}
+details.more summary{cursor:pointer;font-size:12px;color:var(--accent);outline:none}
+details.more div{font-size:12px;color:#9aa3b5;margin-top:7px;line-height:1.75}
+.cfg{display:grid;grid-template-columns:132px 1fr;gap:8px 10px;align-items:center;margin:7px 0}
+.cfg label{margin:0;font-size:12.5px}
+.ds{display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border:1px solid var(--line);
+  border-radius:8px;margin:6px 0;background:var(--panel2)}
+.ds input{margin-top:3px}
+.ds .t{font-size:13px}
+.ds .d{font-size:11.5px;color:var(--dim);margin-top:2px;line-height:1.55}
+.ds .s{font-size:11px;padding:1px 7px;border-radius:10px;margin-left:6px}
+.ds .s.ready{background:#1e2a20;color:#7ee08a}
+.ds .s.auto{background:#1e2733;color:#9fc4ff}
+.ds .s.manual{background:#332a1e;color:#e3b341}
+.cmdline{font-family:ui-monospace,monospace;font-size:11px;color:#7a8296;
+  background:#0b0d11;border:1px solid var(--line);border-radius:6px;padding:7px 9px;margin-top:9px;
+  word-break:break-all}
 </style>
 </head>
 <body>
@@ -103,6 +132,26 @@ th{color:var(--dim);font-weight:500;font-size:11.5px}
 <main>
 <!-- ═══════════════════════════ 对话测试台 ═══════════════════════════ -->
 <section class="view on" id="v-test">
+  <div class="intro">
+    <h2>对话测试台 —— 看同一句话在不同关系下怎么走向相反</h2>
+    <p>左边选<b>关系</b>（评价的参照系）和<b>人格</b>（状态机参数，与关系正交）；中间发一句话；
+       右边看这一句被拆成了什么、6 个通道怎么动、agent 决定<b>做什么</b>和<b>怎么说</b>。</p>
+    <div class="steps">
+      <span><b>1</b> 选 partner，发「我想要你」</span>
+      <span><b>2</b> 换成 stranger，发同一句</span>
+      <span><b>3</b> 对比右侧的通道与动作</span>
+    </div>
+    <details class="more"><summary>这四层分别在做什么？</summary><div>
+      <b>L1 感知</b>：把句子拆成亲和/支配/亲密/痛苦/强度五个量。<u>这些量与说话人是谁无关</u> ——
+      「我想要你」的亲密度就是 0.9，不管对方是谁。<br>
+      <b>L2 评价</b>：关系在这里介入。<code>失配 = 亲密度 − 关系允许的上限 − 容忍度</code>。
+      失配为负走「亲近」，为正走「越界」，中间是平滑过渡而不是开关。<br>
+      <b>L3a 表达</b>：状态 → 给主 LLM 的行为指令。分「做什么」（主动关心/设界/自我披露…）
+      和「怎么说」（语气）。<br>
+      <b>L3b 显示</b>：状态 → 可见的角色表现。戒备渲染成<u>距离感</u>而不是愤怒表情 ——
+      后者等于 agent 对用户发怒。
+    </div></details>
+  </div>
   <div class="grid" style="grid-template-columns:300px 1fr 340px">
     <div>
       <div class="card">
@@ -187,6 +236,19 @@ th{color:var(--dim);font-weight:500;font-size:11.5px}
 
 <!-- ═══════════════════════════ 参数调校 ═══════════════════════════ -->
 <section class="view" id="v-params">
+  <div class="intro">
+    <h2>参数调校 —— 改完必须看方向正确率</h2>
+    <p>这 36 个参数<b>没有可以拟合的标注真值</b>（不存在「正确的情绪轨迹」这种数据）。
+       所以点「应用」时会强制跑一遍反事实套件：<b>方向正确率掉了就说明改坏了</b>。</p>
+    <p>另外有两组配置会被<b>直接拒绝</b>，改不进去：让共情退化成情绪镜像、让示好削弱戒备。
+       后者等于给出一条「持续讨好就能绕过边界」的路径。</p>
+    <details class="more"><summary>怎么调才有意义？</summary><div>
+      不要问「λ 该取 0.9 还是 0.85」，人对这个没有直觉。<br>
+      要问「被冒犯后应该几轮恢复正常」，再反解时间常数 —— 通道的半衰期就是按轮数定义的。<br>
+      同理不要凭空调 <code>breach_to_threat</code>，而是先在测试台上发一句越界的话，
+      看戒备涨到哪一档合理，再回来改。
+    </div></details>
+  </div>
   <div class="card" style="margin-bottom:14px">
     <div class="row">
       <button class="btn primary" id="btnApplyParams">应用并跑反事实</button>
@@ -200,6 +262,13 @@ th{color:var(--dim);font-weight:500;font-size:11.5px}
 
 <!-- ═══════════════════════════ 反事实 ═══════════════════════════ -->
 <section class="view" id="v-cf">
+  <div class="intro">
+    <h2>反事实成对测试 —— 这套系统唯一可靠的真值来源</h2>
+    <p>绝对值无法验证（没人知道「戒备 0.78」对不对），但<b>方向</b>可以：
+       「同一句话，情侣下和陌生人下，哪边的戒备该更高？」人在这类判断上的一致性很高。</p>
+    <p>用例写在 <code>eval/counterfactual/*.yaml</code>，改参数后回来跑一遍即可。
+       下面每条都能展开看断言与实际值。</p>
+  </div>
   <div class="card" style="margin-bottom:14px">
     <div class="row">
       <button class="btn primary" id="btnRunCf">运行全部</button>
@@ -212,6 +281,30 @@ th{color:var(--dim);font-weight:500;font-size:11.5px}
 
 <!-- ═══════════════════════════ 标注 ═══════════════════════════ -->
 <section class="view" id="v-anno">
+  <div class="intro">
+    <h2>标注 —— 优先做成对比较，而不是打分</h2>
+    <p>直接打分的一致性历来很差（「这句亲密度是 0.6 还是 0.7？」），
+       而<b>两句选一句</b>容易得多：每次判断 2–3 秒，打分要 10–15 秒。
+       比较结果用 Bradley-Terry 还原成连续尺度，质量更高、总耗时反而更短。</p>
+    <p><b>标的是「这句话本身携带了什么」，不是「agent 该怎么回应」</b> ——
+       标注时你不知道关系，也不应该知道。关系条件化留给下游的确定性层。</p>
+    <div class="steps">
+      <span><b>1</b> 填名字</span>
+      <span><b>2</b> 选维度（先标 intimacy_bid，它最重要）</span>
+      <span><b>3</b> <kbd>←</kbd><kbd>→</kbd><kbd>↓</kbd> 连续判断</span>
+      <span><b>4</b> 每条至少 3 次比较后看尺度</span>
+    </div>
+    <details class="more"><summary>四个维度分别是什么意思？</summary><div>
+      <b>intimacy_bid 亲密度</b>[0,1] —— 这句话隐含多亲密。<u>最重要</u>，它是失配机制的输入，
+      标错会直接把「亲近」判成「越界」。注意<b>亲密度与是否合适无关</b>：陌生人说「宝贝」
+      亲密度仍是 0.8，不合适这件事由关系层判定。<br>
+      <b>affiliation_bid 亲和</b>[-1,1] —— 敌意 ←→ 亲近。<br>
+      <b>dominance_bid 支配</b>[-1,1] —— 顺从 ←→ 支配。<u>最容易标错</u>，别和「语气强硬」混淆：
+      「你真没用」是敌意+支配，「我不知道该怎么办」是中性+顺从。<br>
+      <b>distress_level 痛苦</b>[0,1] —— 对方<u>自身</u>的处境有多难受，与敌意无关。<br>
+      拿不准就选「相当」，不要硬分高下。完整说明见「标注指南」。
+    </div></details>
+  </div>
   <div class="card" style="margin-bottom:14px">
     <div class="row">
       <input type="text" id="annotator" placeholder="标注者名字" style="width:140px">
@@ -267,18 +360,90 @@ th{color:var(--dim);font-weight:500;font-size:11.5px}
 
 <!-- ═══════════════════════════ 训练 ═══════════════════════════ -->
 <section class="view" id="v-train">
-  <div class="card" style="margin-bottom:14px">
-    <div class="row">
-      <button class="btn primary" data-job="stage1">阶段一 预训练</button>
-      <button class="btn" data-job="stage2">阶段二 回归微调</button>
-      <button class="btn" data-job="export">导出 ONNX</button>
-      <button class="btn" data-job="eval">评估 L1</button>
-      <button class="btn" data-job="counterfactual">反事实</button>
-      <input type="text" id="jobArgs" placeholder="额外参数，如 --bootstrap 6000" style="flex:1">
+  <div class="intro">
+    <h2>训练 L1 感知层</h2>
+    <p>两阶段。<b>阶段一</b>用开源情感数据让 encoder 学会「中文里什么样的表达携带情绪」；
+       <b>阶段二</b>换掉分类头，改成学 UserMove 的五个连续量。
+       两阶段<b>不要混在一起训</b>，效果会明显更差。</p>
+    <p>整个系统的行为主要由 L2 的参数决定，<b>不由 L1 的精度决定</b> ——
+       所以先在测试台和反事实面板把 L2 调对，再来训模型。</p>
+    <div class="steps">
+      <span><b>1</b> 阶段一预训练</span>
+      <span><b>2</b> 标注 → 导出</span>
+      <span><b>3</b> 阶段二微调</span>
+      <span><b>4</b> 导出 ONNX</span>
+      <span><b>5</b> 评估</span>
     </div>
   </div>
-  <div class="grid" style="grid-template-columns:1fr 320px">
-    <div class="card"><h3>日志</h3><pre id="jobLog" style="max-height:460px">（未启动）</pre></div>
+
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(400px,1fr))">
+    <div class="card">
+      <h3>阶段一 · 通用情感感知预训练</h3>
+      <div class="hint">每个数据集接一个自己的原生标签分类头，共享 encoder。</div>
+      <div id="dsList" style="margin:10px 0"></div>
+      <div class="cfg">
+        <label>epoch</label><input type="number" id="s1Epochs" value="3" min="1" max="20">
+        <label>batch size</label><input type="number" id="s1Batch" value="64" min="8" step="8">
+        <label>学习率</label><input type="number" id="s1Lr" value="0.00005" step="0.00001">
+        <label>每集截断 <span class="help" title="调试用：只取前 N 条，几十秒跑完一轮">?</span></label>
+        <input type="number" id="s1Max" placeholder="留空 = 全量" min="0">
+      </div>
+      <div class="cmdline" id="s1Cmd"></div>
+      <button class="btn primary" data-job="stage1" style="margin-top:10px">开始阶段一</button>
+    </div>
+
+    <div class="card">
+      <h3>阶段二 · UserMove 回归微调</h3>
+      <div class="hint">丢弃阶段一的分类头，换上 5 维回归 + 1 维指向性。</div>
+      <div class="cfg">
+        <label>阶段一权重</label><select id="s2Stage1"></select>
+        <label>训练数据</label>
+        <select id="s2Source">
+          <option value="annotations">人工标注（正常路径）</option>
+          <option value="bootstrap" selected>bootstrap 弱标签（仅验证链路）</option>
+        </select>
+        <label id="s2FileLabel">标注文件</label><select id="s2File"></select>
+        <label id="s2BootLabel">bootstrap 条数</label><input type="number" id="s2Boot" value="6000" step="1000">
+        <label>epoch</label><input type="number" id="s2Epochs" value="3" min="1" max="20">
+        <label>学习率</label><input type="number" id="s2Lr" value="0.00001" step="0.000005">
+      </div>
+      <div class="hint" id="s2Warn"></div>
+      <div class="cmdline" id="s2Cmd"></div>
+      <button class="btn primary" data-job="stage2" style="margin-top:10px">开始阶段二</button>
+    </div>
+
+    <div class="card">
+      <h3>导出 ONNX</h3>
+      <div class="hint">导出 + int8 量化 + 与 torch 的一致性校验 + 延迟基准。</div>
+      <div class="cfg">
+        <label>模型目录</label><select id="exModel"></select>
+        <label>输出目录</label><input type="text" id="exOut" value="artifacts/l1_onnx">
+        <label>基准迭代</label><input type="number" id="exBench" value="200" step="50">
+        <label>int8 量化</label><label style="margin:0"><input type="checkbox" id="exQuant" checked> 同时导出量化版</label>
+      </div>
+      <div class="hint">⚠️ 量化与延迟基准必须在<b>目标生产硬件</b>上重做，开发机数据不作数。</div>
+      <div class="cmdline" id="exCmd"></div>
+      <button class="btn primary" data-job="export" style="margin-top:10px">导出</button>
+    </div>
+
+    <div class="card">
+      <h3>评估</h3>
+      <div class="hint">指标是 MAE + Spearman ρ。序关系比绝对值重要 —— 绝对值可由 L2 的增益校准。</div>
+      <div class="cfg">
+        <label>被测</label>
+        <select id="evModel"><option value="heuristic">规则桩（基线）</option></select>
+      </div>
+      <div class="hint">评估集只接受人工标注的真实会话。用蒸馏数据评估，测的是「学生像不像老师」。</div>
+      <div class="cmdline" id="evCmd"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" data-job="eval">评估 L1</button>
+        <button class="btn" data-job="counterfactual">跑反事实</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 320px;margin-top:14px">
+    <div class="card"><h3>日志</h3><pre id="jobLog" style="max-height:420px">（未启动）</pre></div>
     <div>
       <div class="card"><h3>任务</h3><div id="jobList" class="mono dim">—</div></div>
       <div class="card" style="margin-top:14px"><h3>产物</h3><div id="artifacts" class="mono dim">—</div></div>
@@ -332,7 +497,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on',v.id==='v-'+b.dataset.v));
   if(b.dataset.v==='cf')runCf();
   if(b.dataset.v==='anno')loadAnno();
-  if(b.dataset.v==='train')refreshJobs();
+  if(b.dataset.v==='train'){refreshJobs();loadDatasets()}
 });
 
 // ───────── 启动
@@ -549,6 +714,11 @@ async function loadAnno(){
   }
 }
 function renderStats(s){$('statPill').textContent=`${s.rated}/${s.items} 已评分 · ${s.comparisons_total} 次比较`;
+  if(!s.items){$('cmpBox').innerHTML='<div style="text-align:center;padding:34px">'+
+    '<div style="font-size:15px;margin-bottom:8px">还没有待标注数据</div>'+
+    '<div class="dim" style="font-size:13px;margin-bottom:16px">'+
+    '先导入真实会话（评估集只能来自 real_session），或载入内置的 146 条示例先熟悉流程。</div>'+
+    '<button class="btn primary" onclick="document.getElementById(\'btnImportOpen\').click()">导入数据</button></div>';return}
   $('annoStats').innerHTML=`条目 ${s.items} · 已评分 ${s.rated} · 跳过 ${s.skipped} · 评估集 ${s.golden}<br>`+
     `比较：${Object.entries(s.comparisons_by_dimension).map(([k,v])=>`${k} ${v}`).join(' · ')}<br>`+
     `来源：${JSON.stringify(s.by_source)} · 危机标记 ${s.crisis_flagged}`}
@@ -593,11 +763,69 @@ $('btnDoImport').onclick=async()=>{
   catch(e){toast(e.message,true)}};
 
 // ───────── 训练
+let DS=null;
+async function loadDatasets(){
+  DS=await api('/api/datasets');
+  $('dsList').innerHTML=DS.datasets.map(d=>{
+    const cls=d.present?'ready':d.auto?'auto':'manual';
+    const on=d.recommended&&d.usable?'checked':'';
+    return `<label class="ds"><input type="checkbox" data-ds="${d.key}" ${on} ${d.usable?'':'disabled'}>
+      <span><span class="t">${d.label}<span class="s ${cls}">${d.status}</span></span>
+      <span class="d">${d.detail}</span></span></label>`}).join('');
+  document.querySelectorAll('[data-ds]').forEach(c=>c.onchange=previewCmds);
+
+  const arts=DS.artifacts.filter(a=>a.startsWith('l1_'));
+  $('s2Stage1').innerHTML=arts.map(a=>`<option value="artifacts/${a}">artifacts/${a}</option>`).join('')
+    ||'<option value="artifacts/l1_stage1">artifacts/l1_stage1（还不存在）</option>';
+  $('s2Stage1').value='artifacts/l1_stage1';
+  $('exModel').innerHTML=arts.map(a=>`<option value="artifacts/${a}">artifacts/${a}</option>`).join('')
+    ||'<option value="artifacts/l1_stage2">artifacts/l1_stage2（还不存在）</option>';
+  if(arts.includes('l1_stage2'))$('exModel').value='artifacts/l1_stage2';
+  $('evModel').innerHTML='<option value="heuristic">规则桩（基线）</option>'
+    +arts.filter(a=>a.includes('onnx')).map(a=>`<option value="${a}">${a}</option>`).join('');
+  $('s2File').innerHTML=DS.annotation_exports.map(f=>`<option>${f}</option>`).join('')
+    ||'<option value="">（还没有导出的标注）</option>';
+  syncStage2(); previewCmds();
+}
+function syncStage2(){
+  const ann=$('s2Source').value==='annotations';
+  $('s2FileLabel').style.display=ann?'':'none'; $('s2File').style.display=ann?'':'none';
+  $('s2BootLabel').style.display=ann?'none':''; $('s2Boot').style.display=ann?'none':'';
+  $('s2Warn').innerHTML=ann?'':
+    '⚠️ bootstrap 用开源情感标签弱映射出目标，<b>产出的模型不可上线</b> —— '+
+    '微博语料里的 angry 在客服语境下会被误映射，而且模型会学得很自信。只用来验证链路。';
+}
+$('s2Source').onchange=()=>{syncStage2();previewCmds()};
+
+function jobConfig(kind){
+  if(kind==='stage1')return{datasets:[...document.querySelectorAll('[data-ds]:checked')].map(c=>c.dataset.ds),
+    epochs:+$('s1Epochs').value,batch_size:+$('s1Batch').value,lr:+$('s1Lr').value,
+    max_per_dataset:+$('s1Max').value||null};
+  if(kind==='stage2')return{stage1:$('s2Stage1').value,source:$('s2Source').value,
+    annotations:$('s2File').value,bootstrap:+$('s2Boot').value,
+    epochs:+$('s2Epochs').value,lr:+$('s2Lr').value};
+  if(kind==='export')return{model_dir:$('exModel').value,out:$('exOut').value,
+    bench:+$('exBench').value,quantize:$('exQuant').checked};
+  if(kind==='eval')return{model:$('evModel').value};
+  return{verbose:true};
+}
+async function previewCmds(){
+  for(const [kind,el] of [['stage1','s1Cmd'],['stage2','s2Cmd'],['export','exCmd'],['eval','evCmd']]){
+    try{const r=await api('/api/train/preview',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({kind,config:jobConfig(kind)})});
+      $(el).textContent='$ '+r.command}
+    catch(e){$(el).innerHTML='<span class="bad">'+esc(e.message)+'</span>'}
+  }
+}
+document.querySelectorAll('#v-train input,#v-train select').forEach(el=>
+  el.addEventListener('change',previewCmds));
+
 document.querySelectorAll('[data-job]').forEach(b=>b.onclick=async()=>{
-  const extra=$('jobArgs').value.trim().split(/\s+/).filter(Boolean);
+  const kind=b.dataset.job;
   try{const r=await api('/api/train/start',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({kind:b.dataset.job,extra_args:extra})});
-    JOB=r.job_id;JOB_OFFSET=0;$('jobLog').textContent='';toast('已启动 '+b.dataset.job);pollJob()}
+    body:JSON.stringify({kind,config:jobConfig(kind)})});
+    JOB=r.job_id;JOB_OFFSET=0;$('jobLog').textContent='$ '+r.command+'\n\n';
+    toast('已启动 '+kind);pollJob()}
   catch(e){toast(e.message,true)}});
 
 async function pollJob(){
@@ -607,7 +835,8 @@ async function pollJob(){
     if(r.lines.length){$('jobLog').textContent+=r.lines.join('\n')+'\n';
       $('jobLog').scrollTop=1e9;JOB_OFFSET=r.next_offset}
     if(r.status==='running')setTimeout(pollJob,900);
-    else{toast(`任务${r.status==='done'?'完成':'失败'}（exit ${r.exit_code}）`,r.status!=='done');refreshJobs()}
+    else{toast(`任务${r.status==='done'?'完成':'失败'}（exit ${r.exit_code}）`,r.status!=='done');
+      refreshJobs();loadDatasets()}
   }catch{setTimeout(pollJob,2000)}
 }
 async function refreshJobs(){

@@ -333,9 +333,98 @@ def test_agreement_detects_disagreement() -> None:
     assert agreement(comps)["raw_agreement"] == 0.0
 
 
+# ------------------------------------------------------------------ 数据集
+def test_datasets_report_availability(client: TestClient) -> None:
+    d = client.get("/api/datasets").json()
+    keys = {x["key"] for x in d["datasets"]}
+    assert {"ewect", "simplifyweibo", "cped", "m3ed"} <= keys
+    for x in d["datasets"]:
+        assert x["status"] and x["detail"]
+        # 自动下载的一定可用；需手动获取的只有本地存在才可用
+        assert x["usable"] == (x["present"] or x["auto"])
+    ewect = next(x for x in d["datasets"] if x["key"] == "ewect")
+    assert ewect["auto"] and ewect["recommended"]
+
+
+def test_seed_pool_autoloaded(tmp_path) -> None:
+    """空库的标注面板没法用，也看不出该怎么用 —— 首次启动要自动灌种子。"""
+    db = PlatformDB(tmp_path / "fresh.db")
+    assert db.stats()["items"] == 0
+    srv._autoload_seed(db)
+    stats = db.stats()
+    assert stats["items"] > 100
+    assert stats["by_source"] == {"seed": stats["items"]}, "种子必须标成 seed，不能进评估集"
+    # 幂等：再调一次不会重复灌
+    srv._autoload_seed(db)
+    assert db.stats()["items"] == stats["items"]
+
+
 # ------------------------------------------------------------------ 训练
 def test_unknown_job_rejected(client: TestClient) -> None:
     assert client.post("/api/train/start", json={"kind": "rm -rf"}).status_code == 422
+
+
+def test_command_is_built_from_structured_config(client: TestClient) -> None:
+    """面板配置 → 命令行。不接受自由文本参数：让人背参数是这个面板存在的反面。"""
+    r = client.post(
+        "/api/train/preview",
+        json={
+            "kind": "stage1",
+            "config": {
+                "datasets": ["ewect", "simplifyweibo"],
+                "epochs": 5,
+                "batch_size": 32,
+                "max_per_dataset": 500,
+            },
+        },
+    ).json()
+    cmd = r["command"]
+    assert "--datasets ewect simplifyweibo" in cmd
+    assert "--epochs 5" in cmd and "--batch-size 32" in cmd
+    assert "--max-per-dataset 500" in cmd
+
+
+def test_stage2_source_switches_flags(client: TestClient) -> None:
+    boot = client.post(
+        "/api/train/preview",
+        json={"kind": "stage2", "config": {"source": "bootstrap", "bootstrap": 8000}},
+    ).json()["command"]
+    assert "--bootstrap 8000" in boot and "--annotations" not in boot
+
+    ann = client.post(
+        "/api/train/preview",
+        json={"kind": "stage2", "config": {"source": "annotations", "annotations": "x.jsonl"}},
+    ).json()["command"]
+    assert "--annotations" in ann and "--bootstrap" not in ann
+
+
+def test_stage2_annotations_without_file_is_rejected(client: TestClient) -> None:
+    r = client.post(
+        "/api/train/preview", json={"kind": "stage2", "config": {"source": "annotations"}}
+    )
+    assert r.status_code == 422
+    assert "先在标注面板导出" in r.json()["detail"]
+
+
+def test_export_quantize_toggle(client: TestClient) -> None:
+    on = client.post(
+        "/api/train/preview", json={"kind": "export", "config": {"quantize": True}}
+    ).json()["command"]
+    off = client.post(
+        "/api/train/preview", json={"kind": "export", "config": {"quantize": False}}
+    ).json()["command"]
+    assert "--no-quantize" not in on and "--no-quantize" in off
+
+
+def test_eval_defaults_to_heuristic_baseline(client: TestClient) -> None:
+    cmd = client.post("/api/train/preview", json={"kind": "eval", "config": {}}).json()["command"]
+    assert "--heuristic" in cmd
+
+
+def test_preview_does_not_execute(client: TestClient) -> None:
+    """预览只翻译命令，不能真的跑起来。"""
+    client.post("/api/train/preview", json={"kind": "stage1", "config": {}})
+    assert client.get("/api/train/jobs").json()["jobs"] == []
 
 
 def test_job_log_404(client: TestClient) -> None:
