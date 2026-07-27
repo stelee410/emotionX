@@ -25,9 +25,19 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+try:
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+    from pydantic import BaseModel, Field
+except ModuleNotFoundError as _exc:  # pragma: no cover - 启动期的可读报错
+    import sys as _sys
+
+    _sys.exit(
+        f"缺少依赖 {_exc.name!r}。平台需要 studio extra，且要用项目的虚拟环境启动：\n\n"
+        '    uv pip install --python .venv/bin/python -e ".[dev,studio]"\n'
+        "    .venv/bin/python studio/server.py\n\n"
+        f"（当前解释器：{_sys.executable}）"
+    )
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))

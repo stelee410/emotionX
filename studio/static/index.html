@@ -525,7 +525,6 @@ $('annotator').onchange=loadAnno;
 
 async function loadAnno(){
   const who=$('annotator').value.trim(); if(!who){$('annoStats').textContent='先填标注者名字';return}
-  const s=await api('/api/meta').then(()=>null).catch(()=>null);
   if($('annoMode').value==='compare'){
     const dim=$('annoDim').value; $('dimLabel').textContent=dim;
     const r=await api(`/api/annotate/pair?dimension=${dim}&annotator=${encodeURIComponent(who)}`);
