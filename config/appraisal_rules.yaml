@@ -1,0 +1,60 @@
+# §4.2 Appraisal 规则表 —— 不是硬编码，必须可配置。
+#
+# 语义：每条规则命中后，把 delta 累加到本轮的 Δ_appraisal 向量上。
+# 多条规则可同时命中（例如 frustration + latency_slow）。
+#
+# 条件 DSL（when 块，全部为 AND）：
+#   strategy:        UserAffect.strategy 等于该值
+#   intensity:       high | low            （阈值 types.HIGH_INTENSITY_THRESHOLD = 0.55）
+#   event:           ConversationEvent 上为 True 的布尔字段名
+#   latency_gt_ms:   ConversationEvent.latency_ms 大于该值
+#   min_confidence:  UserAffect.confidence 不低于该值（低置信度时不触发强规则）
+#
+# scale_by_intensity: true 时 delta 再乘以 UserAffect.intensity，
+#   用于让"稍微有点不耐烦"和"暴怒"产生不同幅度的冲击。
+
+version: 1
+
+# 置信度低于此值时，情感类规则（依赖 strategy 的规则）一律降权
+low_confidence_threshold: 0.45
+low_confidence_scale: 0.4
+
+rules:
+  - id: distress_high
+    when: {strategy: distress, intensity: high}
+    delta: {valence: -0.15, arousal: 0.30, dominance: -0.20, concern: 0.60}
+    scale_by_intensity: false
+    note: |
+      非对称：concern 大幅上升(+0.60)，valence 只轻微下降(-0.15)。
+      这是"共情 ≠ 镜像"的实现载体。改动此行前请先读 §4.2 与 §12.2。
+
+  - id: distress_low
+    when: {strategy: distress, intensity: low}
+    delta: {valence: -0.05, arousal: 0.10, dominance: -0.05, concern: 0.25}
+
+  - id: frustration
+    when: {strategy: frustration}
+    delta: {valence: -0.20, arousal: 0.35, dominance: -0.30, concern: 0.35}
+
+  # 重复诉求是挫败的强信号；此规则与 frustration 叠加会过冲，
+  # 因此用 replaces 声明互斥：命中本条时撤掉 frustration 的贡献。
+  - id: frustration_repeated
+    when: {strategy: frustration, event: user_repeated_query}
+    replaces: [frustration]
+    delta: {valence: -0.35, arousal: 0.45, dominance: -0.45, concern: 0.50}
+
+  - id: positive
+    when: {strategy: positive}
+    delta: {valence: 0.35, arousal: 0.15, dominance: 0.15, concern: -0.15}
+
+  - id: task_succeeded
+    when: {event: task_succeeded}
+    delta: {valence: 0.40, arousal: 0.10, dominance: 0.25, concern: -0.20}
+
+  - id: task_failed
+    when: {event: task_failed}
+    delta: {valence: -0.30, arousal: 0.25, dominance: -0.35, concern: 0.20}
+
+  - id: latency_slow
+    when: {latency_gt_ms: 5000}
+    delta: {valence: -0.10, arousal: 0.10, dominance: -0.10, concern: 0.0}

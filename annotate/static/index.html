@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Affect 标注站</title>
+<style>
+  :root {
+    --bg: #12141a; --panel: #1b1e26; --panel2: #22262f; --line: #2d323d;
+    --fg: #e7e9ee; --dim: #98a0b0; --accent: #6ea8fe;
+    --neutral: #7f8899; --distress: #6ea8fe; --frustration: #f0883e; --positive: #56d364;
+    --warn: #e5534b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.6 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 10px 20px;
+    background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+  header .spacer { flex: 1; }
+  header input[type=text] {
+    background: var(--panel2); border: 1px solid var(--line); color: var(--fg);
+    border-radius: 6px; padding: 5px 9px; width: 110px; font-size: 13px;
+  }
+  header a, header button {
+    background: var(--panel2); border: 1px solid var(--line); color: var(--dim);
+    border-radius: 6px; padding: 5px 10px; font-size: 13px; cursor: pointer; text-decoration: none;
+  }
+  header button:hover, header a:hover { color: var(--fg); border-color: var(--accent); }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 22px 20px 80px; }
+
+  .progress { height: 4px; background: var(--panel2); border-radius: 2px; overflow: hidden; margin-bottom: 22px; }
+  .progress > div { height: 100%; background: var(--accent); transition: width .25s; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px 22px; }
+  .ctx { color: var(--dim); font-size: 13.5px; border-left: 2px solid var(--line); padding: 2px 0 2px 12px; margin-bottom: 16px; }
+  .ctx b { color: #b9c0cd; font-weight: 500; }
+  .utt { font-size: 21px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+  .badges { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge { font-size: 11.5px; color: var(--dim); background: var(--panel2); border: 1px solid var(--line); border-radius: 20px; padding: 2px 10px; }
+  .badge.golden { color: #e3b341; border-color: #6b5320; }
+  .badge.crisis { color: var(--warn); border-color: #6b2b28; }
+
+  h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--dim); margin: 26px 0 10px; font-weight: 600; }
+
+  .labels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .label {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    padding: 12px 10px; cursor: pointer; text-align: left; color: var(--fg);
+    transition: border-color .12s, background .12s;
+  }
+  .label:hover { border-color: #46506b; }
+  .label .k { display: inline-block; width: 18px; height: 18px; line-height: 18px; text-align: center;
+    background: var(--panel2); border-radius: 4px; font-size: 11px; color: var(--dim); margin-right: 7px; }
+  .label .n { font-weight: 600; font-size: 14.5px; }
+  .label .d { font-size: 12px; color: var(--dim); margin-top: 5px; line-height: 1.45; }
+  .label[data-k="neutral"].on     { border-color: var(--neutral);     background: #7f889914; }
+  .label[data-k="distress"].on    { border-color: var(--distress);    background: #6ea8fe14; }
+  .label[data-k="frustration"].on { border-color: var(--frustration); background: #f0883e14; }
+  .label[data-k="positive"].on    { border-color: var(--positive);    background: #56d36414; }
+
+  .slider { display: grid; grid-template-columns: 92px 1fr 54px; align-items: center; gap: 14px; margin: 12px 0; }
+  .slider label { font-size: 13px; color: var(--dim); }
+  .slider .val { font-variant-numeric: tabular-nums; text-align: right; font-size: 13.5px; color: #b9c0cd; }
+  input[type=range] { -webkit-appearance: none; width: 100%; height: 4px; background: var(--panel2); border-radius: 2px; }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%;
+    background: var(--accent); cursor: pointer; border: 2px solid var(--bg);
+  }
+  .hint { font-size: 11.5px; color: #6b7385; display: flex; justify-content: space-between; margin: -6px 0 4px 106px; }
+
+  .row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-top: 16px; }
+  .chk { display: flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--dim); cursor: pointer; }
+  .chk input { accent-color: var(--warn); }
+  textarea {
+    width: 100%; min-height: 52px; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 7px; color: var(--fg); padding: 9px 11px; font: inherit; font-size: 13.5px; resize: vertical;
+  }
+  .actions { display: flex; gap: 10px; margin-top: 20px; align-items: center; }
+  .btn {
+    border: 1px solid var(--line); background: var(--panel2); color: var(--fg);
+    border-radius: 8px; padding: 10px 20px; font-size: 14px; cursor: pointer;
+  }
+  .btn.primary { background: #2d5bb9; border-color: #3a6ed0; font-weight: 600; }
+  .btn.primary:disabled { background: var(--panel2); border-color: var(--line); color: #5c6376; cursor: not-allowed; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  kbd { font: 11px ui-monospace, monospace; background: #0d0f14; border: 1px solid var(--line);
+        border-radius: 4px; padding: 1px 5px; color: var(--dim); }
+
+  .stats { margin-top: 30px; display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; }
+  .stat .v { font-size: 20px; font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 11.5px; color: var(--dim); margin-top: 2px; }
+  .stat.alarm .v { color: var(--warn); }
+  .dist { margin-top: 12px; display: flex; height: 22px; border-radius: 5px; overflow: hidden; border: 1px solid var(--line); }
+  .dist div { display: flex; align-items: center; justify-content: center; font-size: 11px; color: #10131a; font-weight: 600; }
+
+  .toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 18px; font-size: 13.5px; opacity: 0; transition: opacity .2s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  .toast.err { border-color: var(--warn); color: #ffb3ae; }
+  .empty { text-align: center; padding: 60px 20px; color: var(--dim); }
+  .sugg { font-size: 12.5px; color: #8b93a5; margin-top: 8px; }
+  dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; max-width: 620px; width: 92%; }
+  dialog::backdrop { background: #000a; }
+  dialog textarea { min-height: 180px; font-family: ui-monospace, monospace; font-size: 12.5px; }
+  dialog .frow { display: flex; gap: 12px; align-items: center; margin: 10px 0; font-size: 13px; color: var(--dim); }
+  dialog select, dialog input[type=number] { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Affect 标注站</h1>
+  <label style="font-size:13px;color:var(--dim)">标注者
+    <input type="text" id="annotator" placeholder="你的名字">
+  </label>
+  <label class="chk" title="golden set 标注时请务必关闭，避免锚定偏差">
+    <input type="checkbox" id="showSugg"> 显示模型建议
+  </label>
+  <span class="spacer"></span>
+  <button id="btnImport">导入数据</button>
+  <button id="btnExport">导出</button>
+  <a href="/guideline" target="_blank">标注指南</a>
+</header>
+
+<div class="wrap">
+  <div class="progress"><div id="bar" style="width:0%"></div></div>
+  <div id="main"></div>
+
+  <h3>进度</h3>
+  <div class="stats" id="stats"></div>
+  <div class="dist" id="dist"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<dialog id="dlgImport">
+  <form method="dialog" style="padding:20px">
+    <h3 style="margin-top:0">导入待标注数据</h3>
+    <p style="font-size:12.5px;color:var(--dim);margin:0 0 12px">
+      JSONL 每行一个对象，字段：<code>utterance</code>（必需）、<code>last_agent_reply</code>、<code>session_id</code>、<code>turn_index</code>。
+      也可选 <b>纯文本</b>：一行一句。
+    </p>
+    <textarea id="impContent" placeholder='{"utterance": "还是不行，一样的报错", "last_agent_reply": "请再试一次"}'></textarea>
+    <div class="frow">
+      <span>格式</span>
+      <select id="impFormat"><option value="jsonl">jsonl</option><option value="lines">纯文本(每行一句)</option><option value="csv">csv</option></select>
+      <span>来源</span>
+      <select id="impSource">
+        <option value="real_session">real_session（真实会话）</option>
+        <option value="seed">seed（种子样例）</option>
+        <option value="synthetic">synthetic（合成）</option>
+        <option value="distilled">distilled（蒸馏）</option>
+      </select>
+    </div>
+    <div class="frow">
+      <span>golden 比例</span><input type="number" id="impGolden" value="0.35" step="0.05" min="0" max="1" style="width:80px">
+      <span>双标比例</span><input type="number" id="impDouble" value="0.2" step="0.05" min="0" max="1" style="width:80px">
+    </div>
+    <p style="font-size:12px;color:#6b7385;margin:4px 0 14px">
+      golden set 只允许来自真实会话（§8.1）；来源非 real_session 时 golden 比例会被强制为 0。
+    </p>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn" value="cancel">取消</button>
+      <button class="btn primary" id="doImport" value="ok" type="button">导入</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const LABELS = [
+  {k:'neutral',     n:'常规应答',   d:'直接回答就好。事务性提问、简短应答。'},
+  {k:'distress',    n:'困扰/焦虑',  d:'需要先接住情绪。直接给方案会显得冷漠。'},
+  {k:'frustration', n:'不耐烦/受阻', d:'他要效率不要共情。第一句就给答案。'},
+  {k:'positive',    n:'满意/愉悦',  d:'可延展、可轻松。客套道谢算 neutral。'},
+];
+// 按标签给的 VAD 经验默认值 —— 标注者必须按实际句子调整（见指南 §3）
+const DEFAULTS = {
+  neutral:     {valence: 0.0,  arousal: 0.20, intensity: 0.15},
+  distress:    {valence:-0.55, arousal: 0.45, intensity: 0.60},
+  frustration: {valence:-0.50, arousal: 0.70, intensity: 0.65},
+  positive:    {valence: 0.55, arousal: 0.45, intensity: 0.50},
+};
+
+let item = null, chosen = null, shownAt = 0, suggestionShown = false, busy = false;
+
+const $ = (id) => document.getElementById(id);
+const annotator = () => ($('annotator').value || '').trim();
+
+function toast(msg, isErr=false) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 1900);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { detail = (await r.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return r.json();
+}
+
+function renderStats(s) {
+  if (!s) return;
+  const done = s.labeled_items + s.skipped_items;
+  $('bar').style.width = s.total_items ? (100 * done / s.total_items).toFixed(1) + '%' : '0%';
+  const ag = s.agreement || {};
+  const kappaAlarm = ag.kappa !== null && ag.kappa !== undefined && ag.kappa < 0.5;
+  const cells = [
+    ['已标注', s.labeled_items], ['剩余', s.remaining], ['跳过', s.skipped_items],
+    ['危机标记', s.crisis_flagged], ['平均耗时', s.avg_seconds_per_item + 's'],
+    ['双标条数', ag.n_double_annotated ?? 0],
+    ['Kappa', ag.kappa ?? '—', kappaAlarm],
+  ];
+  $('stats').innerHTML = cells.map(([l, v, alarm]) =>
+    `<div class="stat${alarm ? ' alarm' : ''}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+
+  const by = s.by_label || {}, tot = Object.values(by).reduce((a, b) => a + b, 0);
+  $('dist').innerHTML = !tot ? '' : LABELS.map(l => {
+    const c = by[l.k] || 0, pct = 100 * c / tot;
+    return pct < 0.5 ? '' :
+      `<div style="width:${pct}%;background:var(--${l.k})" title="${l.k} ${c}">${pct > 8 ? l.k + ' ' + c : ''}</div>`;
+  }).join('');
+}
+
+function renderItem() {
+  if (!item) {
+    $('main').innerHTML = `<div class="card empty">
+      <div style="font-size:17px">🎉 池子标完了</div>
+      <div style="margin-top:8px">用右上角「导入数据」加入更多真实会话，或「导出」拿到训练/评估集。</div></div>`;
+    return;
+  }
+  const badges = [`<span class="badge">#${item.id}</span>`, `<span class="badge">${item.source}</span>`];
+  if (item.split === 'golden') badges.push('<span class="badge golden">golden set</span>');
+  if (item.crisis_hint_tier === 2) badges.push('<span class="badge crisis">关键词层判为危机</span>');
+  else if (item.crisis_hint_tier === 1) badges.push('<span class="badge crisis">含模糊绝望信号</span>');
+  if (item.session_id) badges.push(`<span class="badge">${item.session_id} · 第${item.turn_index}轮</span>`);
+
+  const sugg = item.suggestion
+    ? `<div class="sugg">模型建议（仅参考，可能是错的）：<b>${item.suggestion.strategy}</b>
+        · v=${item.suggestion.valence} a=${item.suggestion.arousal} i=${item.suggestion.intensity}</div>` : '';
+
+  $('main').innerHTML = `
+    <div class="card">
+      ${item.last_agent_reply ? `<div class="ctx"><b>上一轮 agent：</b>${esc(item.last_agent_reply)}</div>` : ''}
+      <div class="utt">${esc(item.utterance)}</div>
+      <div class="badges">${badges.join('')}</div>
+      ${sugg}
+    </div>
+
+    <h3>应答策略 <span style="text-transform:none;letter-spacing:0">— 「如果我是客服，下一句该先做什么？」</span></h3>
+    <div class="labels">
+      ${LABELS.map((l, i) => `<button class="label" data-k="${l.k}">
+        <span class="k">${i + 1}</span><span class="n">${l.n}</span>
+        <div class="d">${l.d}</div></button>`).join('')}
+    </div>
+
+    <h3>强度与 VAD</h3>
+    <div class="slider"><label>intensity</label><input type="range" id="sInt" min="0" max="1" step="0.05" value="0.15"><span class="val" id="vInt">0.15</span></div>
+    <div class="hint"><span>无情绪色彩</span><span>≥0.55 触发 high 档</span><span>极强</span></div>
+    <div class="slider"><label>valence</label><input type="range" id="sVal" min="-1" max="1" step="0.05" value="0"><span class="val" id="vVal">0.00</span></div>
+    <div class="hint"><span>很负面</span><span>中性</span><span>很正面</span></div>
+    <div class="slider"><label>arousal</label><input type="range" id="sAro" min="0" max="1" step="0.05" value="0.2"><span class="val" id="vAro">0.20</span></div>
+    <div class="hint"><span>平静/无力</span><span>紧绷/激动</span></div>
+
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="crisis"> 危机信号（自伤/自杀意念）</label>
+    </div>
+    <textarea id="note" placeholder="备注（可选）。若标签定义有歧义，写在这里并跳过 —— 这是最有价值的反馈。" style="margin-top:12px"></textarea>
+
+    <div class="actions">
+      <button class="btn primary" id="btnSubmit" disabled>提交 <kbd>Enter</kbd></button>
+      <button class="btn" id="btnSkip">跳过 <kbd>S</kbd></button>
+      <button class="btn" id="btnUndo">撤销上一条 <kbd>U</kbd></button>
+      <span style="font-size:12px;color:#6b7385">数字键 <kbd>1</kbd>–<kbd>4</kbd> 选标签 · <kbd>↑↓</kbd> 调 intensity · <kbd>←→</kbd> 调 valence</span>
+    </div>`;
+
+  document.querySelectorAll('.label').forEach(b => b.onclick = () => pick(b.dataset.k));
+  for (const [s, v, fmt] of [['sInt','vInt',2], ['sVal','vVal',2], ['sAro','vAro',2]]) {
+    $(s).oninput = () => $(v).textContent = (+$(s).value).toFixed(fmt);
+  }
+  $('btnSubmit').onclick = submit;
+  $('btnSkip').onclick = skip;
+  $('btnUndo').onclick = undo;
+  chosen = null;
+  shownAt = Date.now();
+}
+
+function esc(s) { return (s || '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function pick(k) {
+  chosen = k;
+  document.querySelectorAll('.label').forEach(b => b.classList.toggle('on', b.dataset.k === k));
+  const d = DEFAULTS[k];
+  $('sInt').value = d.intensity; $('vInt').textContent = d.intensity.toFixed(2);
+  $('sVal').value = d.valence;   $('vVal').textContent = d.valence.toFixed(2);
+  $('sAro').value = d.arousal;   $('vAro').textContent = d.arousal.toFixed(2);
+  $('btnSubmit').disabled = false;
+}
+
+async function load() {
+  if (!annotator()) { toast('先填标注者名字', true); return; }
+  suggestionShown = $('showSugg').checked;
+  const r = await api(`/api/next?annotator=${encodeURIComponent(annotator())}&with_suggestion=${suggestionShown}`);
+  item = r.item;
+  renderStats(r.stats);
+  renderItem();
+}
+
+async function submit() {
+  if (!item || !chosen || busy) return;
+  busy = true;
+  try {
+    const r = await api('/api/annotate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        item_id: item.id, annotator: annotator(), strategy: chosen,
+        valence: +$('sVal').value, arousal: +$('sAro').value, intensity: +$('sInt').value,
+        crisis_flag: $('crisis').checked, skipped: false, note: $('note').value,
+        suggestion_shown: suggestionShown, elapsed_ms: Date.now() - shownAt,
+      }),
+    });
+    renderStats(r.stats);
+    await load();
+  } catch (e) { toast(e.message, true); }
+  busy = false;
+}
+
+async function skip() {
+  if (!item || busy) return;
+  busy = true;
+  try {
+    const r = await api('/api/annotate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        item_id: item.id, annotator: annotator(), skipped: true,
+        note: $('note').value, elapsed_ms: Date.now() - shownAt,
+      }),
+    });
+    renderStats(r.stats);
+    await load();
+    toast('已跳过');
+  } catch (e) { toast(e.message, true); }
+  busy = false;
+}
+
+async function undo() {
+  try {
+    const r = await api(`/api/undo?annotator=${encodeURIComponent(annotator())}`, {method: 'POST'});
+    renderStats(r.stats);
+    await load();
+    toast('已撤销 #' + r.item_id);
+  } catch (e) { toast(e.message, true); }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' && e.target.type === 'text') {
+    if (e.key === 'Enter' && e.target.id === 'annotator') { e.target.blur(); load(); }
+    if (!(e.key === 'Enter' && e.metaKey)) return;
+  }
+  const k = e.key.toLowerCase();
+  if (k >= '1' && k <= '4') { pick(LABELS[+k - 1].k); e.preventDefault(); }
+  else if (k === 'enter') { submit(); e.preventDefault(); }
+  else if (k === 's') { skip(); }
+  else if (k === 'u') { undo(); }
+  else if (k === 'c') { const c = $('crisis'); if (c) c.checked = !c.checked; }
+  else if (['arrowup','arrowdown','arrowleft','arrowright'].includes(k)) {
+    const [id, vid, step] = (k === 'arrowup' || k === 'arrowdown')
+      ? ['sInt', 'vInt', k === 'arrowup' ? 0.05 : -0.05]
+      : ['sVal', 'vVal', k === 'arrowright' ? 0.05 : -0.05];
+    const el = $(id); if (!el) return;
+    el.value = Math.min(+el.max, Math.max(+el.min, +el.value + step));
+    $(vid).textContent = (+el.value).toFixed(2);
+    e.preventDefault();
+  }
+});
+
+$('annotator').onchange = () => { localStorage.setItem('annotator', annotator()); load(); };
+$('showSugg').onchange = () => { localStorage.setItem('showSugg', $('showSugg').checked); load(); };
+$('btnImport').onclick = () => $('dlgImport').showModal();
+$('btnExport').onclick = async () => {
+  try {
+    const all = await api('/api/export', {method: 'POST'});
+    const golden = await api('/api/export?split=golden&filename=golden_set.jsonl', {method: 'POST'});
+    const train = await api('/api/export?split=train&filename=stage2_train.jsonl', {method: 'POST'});
+    toast(`导出 ${all.written} 条（golden ${golden.written} / train ${train.written}），冲突 ${all.conflicts} 条 → data/exports/`);
+  } catch (e) { toast(e.message, true); }
+};
+$('doImport').onclick = async () => {
+  try {
+    const r = await api('/api/import', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        content: $('impContent').value, format: $('impFormat').value, source: $('impSource').value,
+        golden_ratio: +$('impGolden').value, double_annotate_ratio: +$('impDouble').value,
+      }),
+    });
+    $('dlgImport').close();
+    $('impContent').value = '';
+    toast(`新增 ${r.added} 条，重复跳过 ${r.duplicates}`);
+    await load();
+  } catch (e) { toast(e.message, true); }
+};
+
+$('annotator').value = localStorage.getItem('annotator') || '';
+$('showSugg').checked = localStorage.getItem('showSugg') === 'true';
+if (annotator()) load(); else { api('/api/stats').then(renderStats); renderItem(); }
+</script>
+</body>
+</html>

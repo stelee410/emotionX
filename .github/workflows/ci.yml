@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 安装依赖（不装 torch —— 生产运行时也不装，见 spec §11）
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -e ".[dev,annotate]"
+
+      - name: ruff
+        run: .venv/bin/ruff check src training eval tests annotate
+
+      - name: ruff format check
+        run: .venv/bin/ruff format --check src annotate || true
+
+      - name: mypy（只管 src/affect —— 生产代码）
+        run: .venv/bin/mypy
+
+      - name: pytest（跳过需要 torch/transformers 的训练测试）
+        run: .venv/bin/python -m pytest tests/ -q --ignore=tests/test_training.py --ignore=tests/test_tokenization.py
+
+  training-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: 安装训练依赖
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -e ".[dev,annotate,training]"
+      - name: pytest（含训练层与 tokenizer 一致性）
+        env:
+          HF_HOME: ${{ github.workspace }}/.hf_cache
+        run: .venv/bin/python -m pytest tests/ -q

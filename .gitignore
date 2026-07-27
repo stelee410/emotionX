@@ -1,0 +1,35 @@
+# ---- 不入库的内部文档（本地保留）----
+# 含产品名、合作方、人名等业务信息，不进公开仓库。
+# 技术设计说明见 docs/architecture.md（已脱敏版本）。
+spec.md
+STATUS.md
+DECISIONS.md
+REQUIREMENTS-v2.md
+ANALYSIS-hormone-model.md
+
+# ---- 环境 ----
+.venv/
+.hf_cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.DS_Store
+
+# ---- 训练产物与数据 ----
+artifacts/
+logs/
+data/raw/ewect/
+data/raw/simplifyweibo/
+data/raw/cped/
+data/raw/m3ed/
+data/raw/ocemotion/
+data/annotations.db
+data/exports/
+data/distilled/
+data/teacher_lora/
+
+# 例外：手写的种子样例池要入库
+!data/raw/seed_pool.jsonl

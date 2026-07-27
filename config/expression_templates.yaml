@@ -1,0 +1,97 @@
+# §5.2 状态 → 行为指令映射
+#
+# 规则：绝不把 VAD 数值塞进 prompt。每个 bucket 对应一段具体的行为指令。
+# 生成参数取所有命中 bucket 中的最保守值（见 §5.3）：
+#   temperature   取 min
+#   max_sentences 取 min
+#   top_p         取 min
+
+version: 1
+
+concern:
+  high:    # > 0.6
+    directive: |
+      用户此刻状态不好。先回应他的处境再谈事情本身，
+      不要急着给方案。语速放缓，句子短一些。不要使用感叹号。
+    generation:
+      temperature: 0.6
+      max_sentences: 4
+  medium:  # 0.3 - 0.6
+    directive: "先简短确认用户的感受，再进入正题。"
+    generation: {temperature: 0.7}
+  low:     # < 0.3
+    directive: ""
+    generation: {temperature: 0.8}
+
+dominance:
+  high:    # > 0.65
+    directive: "直接给出结论和建议，不要反复征询意见。"
+  medium:
+    directive: ""
+  low:     # < 0.35
+    directive: "用试探性措辞（'也许'、'要不要试试'），给用户留出否定的余地。"
+
+arousal:
+  high:    # > 0.6
+    directive: "句子短、节奏紧，去掉修饰性铺陈。"
+    generation: {max_sentences: 4}
+  medium:
+    directive: ""
+  low:     # < 0.3
+    directive: "语气平缓，可以稍微展开说明。"
+
+valence:
+  high:    # > 0.3
+    directive: "语气可以轻快一些，但不要浮夸。"
+  medium:
+    directive: ""
+  low:     # < -0.15
+    directive: "保持平稳中性，不要把自己的低落带进措辞里；服务质量不受影响。"
+
+# 维度之间的互斥：某个 bucket 命中时，压制另一些维度的 directive。
+# 与 overrides 的区别：conflicts 只看 agent 自身状态，不看 L1 的判断，
+# 因此在 L1 没识别出情绪（低强度、低置信度）时依然生效。
+conflicts:
+  - when: {concern: high}
+    suppress: [valence]
+    note: |
+      concern 高时不得再叠加「语气可以轻快一些」——
+      「先回应他的处境」+「语气轻快」是自相矛盾的指令，主 LLM 会产出很怪的语气。
+  - when: {arousal: high}
+    suppress: [valence]
+    note: 用户情绪激动时，agent 自身的好心情不该体现在措辞上。
+
+# frustration 场景的特殊覆盖
+overrides:
+  user_frustration_high:
+    directive: |
+      用户已经不耐烦。删掉所有寒暄和铺垫，第一句话就是答案。
+      不要道歉超过一次。不要解释你为什么之前没做到。
+    generation: {temperature: 0.5, max_sentences: 3}
+    # 命中时压制这些维度的 directive（冲突项）
+    suppress: [concern, valence]
+
+  user_distress_high:
+    directive: |
+      用户情绪很重。第一句先承接他的处境，不要立刻给建议或追问细节。
+      句子短，不要感叹号，不要说"我理解你的感受"这类套话。
+    generation: {temperature: 0.6, max_sentences: 4}
+    suppress: [valence]
+
+  task_failed:
+    directive: |
+      刚刚的尝试失败了。用一句话说明当前状态，然后直接给下一步可执行的选项。
+      不要反复致歉。
+
+# §9.4 医疗信息 bypass：完全跳过情感修饰，只保留安全约束
+medical_bypass:
+  directive: |
+    本轮涉及诊断结论、用药建议或风险提示。语气一律中性、准确、完整，
+    不做任何情感修饰，不省略必要的风险信息，不因语气柔化而弱化警示。
+  generation: {temperature: 0.3, max_sentences: 8}
+
+# 默认生成参数（无任何 bucket 命中时的兜底）
+defaults:
+  temperature: 0.8
+  top_p: 0.9
+  max_sentences: 6

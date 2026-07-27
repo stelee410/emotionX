@@ -1,0 +1,65 @@
+[project]
+name = "emotionx"
+version = "0.1.0"
+description = "关系条件化的情感反应引擎 —— 同一句输入在不同关系设定下产生方向相反的情感反应"
+requires-python = ">=3.11"
+dependencies = [
+    "onnxruntime>=1.18",
+    "numpy",
+    "pydantic>=2.0",
+    "pyyaml",
+    "redis",
+]
+
+[project.optional-dependencies]
+training = [
+    "torch",
+    "transformers>=4.44",
+    "datasets",
+    "optimum[onnxruntime]",
+    "scikit-learn",
+    "matplotlib",
+    "pandas",
+]
+mac = [
+    "mlx-lm",
+]
+annotate = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+    "types-PyYAML",
+]
+
+[project.scripts]
+affect-demo = "affect.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+files = ["src/affect"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
