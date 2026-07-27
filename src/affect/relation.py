@@ -82,6 +82,29 @@ class RelationalFrame(BaseModel):
     def within_tolerance(self, intimacy_bid: float) -> bool:
         return self.mismatch(intimacy_bid) <= 0.0
 
+    def baselines(self) -> dict[str, float]:
+        """关系决定的静息值 —— 状态衰减的目标。
+
+        「关系是参照系」不只作用于评价，也作用于**恒稳态设定点**：
+        情侣从温暖出发，陌生人从中性出发。没有这一条，两种关系在第一轮
+        之前是完全一样的，而且一句冒犯就能把情侣的亲近度清零
+        （因为 affiliation 静息 0.25 之下只有 0.25 的余量）。
+
+        只覆盖与关系直接相关的三个通道；valence/arousal/concern 属于人格，
+        由 persona 决定。
+        """
+        from .channels import CHANNELS, clamp
+
+        return {
+            "affiliation": clamp(0.10 + 0.55 * self.intimacy_permitted, 0.0, 1.0),
+            # 关系越疏远，静息戒备略高（不是敌意，是"还不熟"的自然距离）
+            "threat": clamp(
+                CHANNELS["threat"].baseline + 0.06 * (1.0 - self.intimacy_permitted), 0.0, 1.0
+            ),
+            # 服务关系里 agent 位置较低 → 少下结论；被仰慕时相反
+            "dominance": clamp(CHANNELS["dominance"].baseline + 0.15 * self.power, 0.0, 1.0),
+        }
+
     @property
     def affiliation_ceiling(self) -> float:
         """affiliation 的硬上界。

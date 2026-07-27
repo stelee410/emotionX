@@ -50,22 +50,39 @@ def test_half_life_semantics() -> None:
 
 def test_channels_have_distinct_time_constants() -> None:
     """单一衰减系数无法同时表达「惊一下就过去」和「被冒犯很久才放松」。"""
-    falls = {c.name: c.half_life_fall for c in CHANNELS.values()}
-    assert falls["arousal"] < falls["valence"] < falls["threat"]
-    assert falls["affiliation"] > falls["arousal"]
-    assert len(set(falls.values())) >= 4, "至少要有 4 种不同的下降时间常数"
+    hl = {c.name: c.half_life for c in CHANNELS.values()}
+    assert hl["arousal"] < hl["valence"] < hl["threat"]
+    assert hl["affiliation"] > hl["arousal"]
+    assert len(set(hl.values())) >= 4, "至少要有 4 种不同的衰减半衰期"
+
+
+def test_rise_and_decay_are_orthogonal_params() -> None:
+    """「快升慢降」= 高 gain + 长 half_life。
+
+    早期版本试图用 λ_rise/λ_fall 同时表达升与降，结果 threat 的 λ_rise
+    比 λ_fall 还小，语义反了 —— λ 是保留系数，只管衰减，升速由 gain 决定。
+    """
+    fields = set(CHANNELS["threat"].__dataclass_fields__)
+    assert "gain" in fields and "half_life" in fields
+    assert not (fields & {"half_life_rise", "half_life_fall", "lambda_rise"})
 
 
 def test_threat_is_fast_up_slow_down() -> None:
-    t = CHANNELS["threat"]
-    assert t.half_life_rise < 1.0, "戒备应当瞬间拉起"
-    assert t.half_life_fall > 10.0, "戒备应当很久才消退"
-    assert t.lambda_fall > t.lambda_rise
+    t, a, aff = CHANNELS["threat"], CHANNELS["arousal"], CHANNELS["affiliation"]
+    assert t.gain > a.gain, "戒备应当比唤起还快拉起"
+    assert t.half_life > 10.0, "戒备应当很久才消退"
+    # 戒备建立得比亲近快 —— 越界的代价立刻显现，示好的收益慢慢累积
+    assert t.gain > aff.gain * 2
 
 
 def test_arousal_is_fast_both_ways() -> None:
     a = CHANNELS["arousal"]
-    assert a.half_life_rise <= 1.5 and a.half_life_fall <= 2.0
+    assert a.gain >= 1.0 and a.half_life <= 2.0
+
+
+def test_decay_matches_half_life() -> None:
+    for spec in CHANNELS.values():
+        assert spec.decay == pytest.approx(lambda_from_half_life(spec.half_life))
 
 
 def test_every_channel_baseline_within_range() -> None:

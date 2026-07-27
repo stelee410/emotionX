@@ -51,26 +51,31 @@ def half_life_from_lambda(lam: float) -> float:
 
 @dataclass(frozen=True)
 class ChannelSpec:
-    """一个通道的静态定义。persona 可以覆盖 baseline / 半衰期 / 增益 / 边界。"""
+    """一个通道的静态定义。persona 可以覆盖 baseline / 半衰期 / 增益 / 边界。
+
+    「快升慢降」由**两个正交的参数**表达，不要混在一起：
+
+        gain       —— 升得多快。每单位评价冲击能把通道推多远。
+        half_life  —— 降得多慢。无刺激时偏离量减半所需的轮数。
+
+    早期版本试图用 λ_rise / λ_fall 表达升降，结果 threat 的 λ_rise(0.42)
+    比 λ_fall(0.94) 还小，语义正好反了 —— λ 是**保留系数**，只管衰减。
+    """
 
     name: ChannelName
     lo: float
     hi: float
     baseline: float
-    # 偏离量被**继续推大**时的半衰期（惯性：越大越黏）
-    half_life_rise: float
-    # 无刺激或反向刺激时回到 baseline 的半衰期（越大越难消退）
-    half_life_fall: float
-    gain: float = 1.0
+    # 升得多快
+    gain: float
+    # 降得多慢（半衰期，轮）
+    half_life: float
     note: str = ""
 
     @property
-    def lambda_rise(self) -> float:
-        return lambda_from_half_life(self.half_life_rise)
-
-    @property
-    def lambda_fall(self) -> float:
-        return lambda_from_half_life(self.half_life_fall)
+    def decay(self) -> float:
+        """每轮保留系数 λ。"""
+        return lambda_from_half_life(self.half_life)
 
     def clamp(self, value: float) -> float:
         return clamp(value, self.lo, self.hi)
@@ -79,30 +84,33 @@ class ChannelSpec:
 # ---------------------------------------------------------------------------
 # 默认通道定义
 #
-# 时间常数的取值依据是「可观察行为」而不是生理数据：
-#   arousal      惊动一下 1~2 轮就过去           → 快升快降
-#   valence      心情底色，被破坏后要好几轮       → 中升慢降
-#   dominance    语气确定性，跟随互动节奏         → 中升中降
-#   concern      对方一开口示弱就上来，退得较慢   → 快升中降
-#   affiliation  亲近要慢慢建立，但建立后有余韵   → 中升很慢降
-#   threat       被冒犯瞬间拉满，很久才放松       → 极快升 极慢降
+# 取值依据是「可观察行为」而不是生理数据 —— 调参时问的是
+# 「被冒犯后大概几轮恢复正常」，而不是「λ 该取多少」：
+#
+#   arousal      惊动一下 1~2 轮就过去             快升 快降
+#   valence      心情底色，被破坏后要好几轮         中升 慢降
+#   dominance    语气确定性，跟随互动节奏           中升 中降
+#   concern      对方一示弱就上来，退得较慢         快升 中降
+#   affiliation  亲近要慢慢建立，但建立后有余韵     慢升 慢降
+#   threat       被冒犯瞬间拉起，很久才放松         极快升 极慢降
+#
+# 注意 affiliation.gain < threat.gain 是刻意的：**戒备建立得比亲近快**。
+# 这既符合直觉，也是一条安全性质 —— 越界的代价立刻显现，示好的收益慢慢累积。
 # ---------------------------------------------------------------------------
 DEFAULT_CHANNELS: tuple[ChannelSpec, ...] = (
-    ChannelSpec("valence", -1.0, 1.0, 0.10, 3.0, 6.0, 1.0, "整体语气底色"),
-    ChannelSpec("arousal", 0.0, 1.0, 0.30, 1.0, 1.5, 1.0, "句子长度与节奏"),
-    ChannelSpec("dominance", 0.0, 1.0, 0.50, 2.0, 3.0, 1.0, "给结论 vs 试探性措辞"),
-    ChannelSpec("concern", 0.0, 1.0, 0.25, 1.2, 3.0, 1.0, "先接住情绪 vs 直接给方案"),
-    ChannelSpec(
-        "affiliation", 0.0, 1.0, 0.25, 2.5, 8.0, 1.0, "亲近意愿：主动披露、延展话题"
-    ),
+    #             name          lo    hi   base  gain  half_life
+    ChannelSpec("valence", -1.0, 1.0, 0.10, 0.60, 6.0, "整体语气底色"),
+    ChannelSpec("arousal", 0.0, 1.0, 0.30, 1.00, 1.5, "句子长度与节奏"),
+    ChannelSpec("dominance", 0.0, 1.0, 0.50, 0.70, 3.0, "给结论 vs 试探性措辞"),
+    ChannelSpec("concern", 0.0, 1.0, 0.25, 1.00, 3.0, "先接住情绪 vs 直接给方案"),
+    ChannelSpec("affiliation", 0.0, 1.0, 0.25, 0.60, 8.0, "亲近意愿：主动披露、延展话题"),
     ChannelSpec(
         "threat",
         0.0,
         1.0,
         0.05,
-        0.8,
+        1.40,
         12.0,
-        1.0,
         "戒备：设界、变冷、简短。快升慢降是刻意的——被冒犯后不该下一轮就热络",
     ),
 )
