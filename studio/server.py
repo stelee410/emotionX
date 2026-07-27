@@ -96,6 +96,118 @@ def db() -> PlatformDB:
     return _db
 
 
+# ===========================================================================
+# 中文词表 —— 界面上不出现原始字段名。
+#
+# 集中放在这里而不是散在前端，是为了让「加一个参数就得同时加一条说明」
+# 成为写代码时看得见的事。少一条，UI 上就会露出英文字段名。
+# ===========================================================================
+DIMENSION_LABELS: dict[str, dict[str, str]] = {
+    "intimacy_bid": {
+        "zh": "亲密度",
+        "hint": "这句话隐含多亲密。「你好」≈0.1，「宝贝」≈0.8，「我想要你」≈0.9。",
+        "note": "最重要 —— 它是失配机制的输入，标错会直接把「亲近」判成「越界」。"
+        "注意亲密度与是否合适无关：陌生人说「宝贝」亲密度仍是 0.8。",
+    },
+    "affiliation_bid": {
+        "zh": "亲和",
+        "hint": "敌意 ←→ 亲近。示好、道谢为正；不满、辱骂为负。",
+        "note": "",
+    },
+    "dominance_bid": {
+        "zh": "支配",
+        "hint": "顺从 ←→ 支配。命令、质问为正；请求、示弱、道歉为负。",
+        "note": "最容易标错 —— 别和「语气强硬」混淆。"
+        "「你真没用」是敌意+支配，「我不知道该怎么办」是中性+顺从。",
+    },
+    "distress_level": {
+        "zh": "痛苦",
+        "hint": "对方<b>自身</b>的处境有多难受。与敌意无关 —— 人可以很痛苦但完全不敌对。",
+        "note": "",
+    },
+    "intensity": {
+        "zh": "强度",
+        "hint": "整体的情绪投入程度，独立于方向。「有点烦」和「烦死了」方向相同、强度不同。",
+        "note": "",
+    },
+    "directed_at_agent": {
+        "zh": "指向 agent",
+        "hint": "这句话是在说 agent，还是在说第三方/世界。",
+        "note": "「我讨厌他」该共情，「我讨厌你」该戒备 —— 漏标的代价很大。",
+    },
+}
+
+CHANNEL_LABELS: dict[str, str] = {
+    "valence": "效价", "arousal": "唤起", "dominance": "主导",
+    "concern": "关切", "affiliation": "亲和", "threat": "戒备",
+}
+
+MECHANISM_LABELS: dict[str, str] = {
+    "intimacy_within_relation": "亲密邀请·在关系范围内",
+    "intimacy_breach": "亲密越界",
+    "hostility": "敌意",
+    "complement_affiliation": "人际互补·亲和同向",
+    "complement_dominance": "人际互补·支配反向",
+    "empathic_concern": "共情关切",
+    "task_succeeded": "任务成功",
+    "task_failed": "任务失败",
+    "user_repeated_query": "用户重复诉求",
+    "slow_response": "响应过慢",
+}
+
+BUCKET_LABELS: dict[str, str] = {"high": "高", "medium": "中", "low": "低"}
+
+PARAM_LABELS: dict[str, str] = {
+    "mismatch_softness": "越界判定的软度（越小越像开关）",
+    "warmth_to_affiliation": "关系内的亲密邀请 → 亲和",
+    "warmth_to_valence": "关系内的亲密邀请 → 效价",
+    "warmth_to_arousal": "关系内的亲密邀请 → 唤起",
+    "breach_to_threat": "越界 → 戒备",
+    "breach_to_valence": "越界 → 效价",
+    "breach_to_arousal": "越界 → 唤起",
+    "breach_to_dominance": "越界 → 主导（设界需要主导性）",
+    "breach_to_affiliation": "越界 → 亲和",
+    "hostility_to_threat": "敌意 → 戒备",
+    "hostility_to_valence": "敌意 → 效价",
+    "hostility_to_arousal": "敌意 → 唤起",
+    "hostility_to_affiliation": "敌意 → 亲和",
+    "complement_affiliation": "互补·亲和同向的强度",
+    "complement_dominance": "互补·支配反向的强度（负值 = 用户越强势 agent 越退让）",
+    "distress_to_concern": "对方痛苦 → 关切",
+    "distress_to_valence": "对方痛苦 → 效价（必须只轻微下降，否则是情绪传染）",
+    "distress_to_arousal": "对方痛苦 → 唤起",
+    "success_to_valence": "任务成功 → 效价",
+    "success_to_dominance": "任务成功 → 主导",
+    "success_to_concern": "任务成功 → 关切",
+    "failure_to_valence": "任务失败 → 效价",
+    "failure_to_dominance": "任务失败 → 主导",
+    "failure_to_concern": "任务失败 → 关切",
+    "failure_to_arousal": "任务失败 → 唤起",
+    "repeated_query_to_concern": "用户重复诉求 → 关切",
+    "repeated_query_to_dominance": "用户重复诉求 → 主导",
+    "slow_latency_ms": "「响应过慢」的阈值（毫秒）",
+    "slow_to_valence": "响应过慢 → 效价",
+    "slow_to_arousal": "响应过慢 → 唤起",
+    "threat_inhibits_affiliation": "戒备压制亲和的上升（交叉抑制）",
+    "affiliation_inhibits_threat": "亲和压制戒备 —— 必须为 0，否则示好就能绕过边界",
+    "habituation_decay": "习惯化计数每轮的保留比例",
+    "habituation_strength": "习惯化强度（同类刺激重复时反应递减多少）",
+    "repair_half_life_scale": "用户道歉时戒备半衰期缩到原来的几分之几",
+    "headroom_exponent": "饱和余量指数（越接近上界，同样的冲击推得越少）",
+}
+
+PARAM_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("失配门控 —— 关系是参照系", ("mismatch_softness", "warmth_to", "breach_to")),
+    ("敌意 —— 与亲密度无关", ("hostility_",)),
+    ("人际互补性", ("complement_",)),
+    ("共情 ≠ 镜像", ("distress_to",)),
+    ("业务事件", ("success_to", "failure_to", "repeated_query", "slow_")),
+    ("交叉抑制", ("threat_inhibits", "affiliation_inhibits")),
+    ("习惯化", ("habituation_",)),
+    ("修复与饱和", ("repair_", "headroom_")),
+)
+
+
 # =========================================================== 静态页面
 @app.get("/", response_class=HTMLResponse)
 def index() -> Any:
@@ -114,6 +226,7 @@ def meta() -> dict[str, Any]:
                 "baseline": CHANNELS[n].baseline,
                 "gain": CHANNELS[n].gain,
                 "half_life": CHANNELS[n].half_life,
+                "zh": CHANNEL_LABELS[n],
                 "note": CHANNELS[n].note,
                 "thresholds": BUCKET_THRESHOLDS[n],
             }
@@ -133,8 +246,22 @@ def meta() -> dict[str, Any]:
         "actions": [{"key": a.key, "label": a.label, "when": a.when} for a in ACTIONS],
         "moods": list_moods(),
         "targets": list(REGRESSION_TARGETS),
-        "comparable": list(COMPARABLE),
+        "comparable": [
+            {"key": d, **DIMENSION_LABELS.get(d, {"zh": d, "hint": "", "note": ""})}
+            for d in COMPARABLE
+        ],
         "params": _params.to_dict(),
+        "labels": {
+            "dimensions": DIMENSION_LABELS,
+            "channels": CHANNEL_LABELS,
+            "mechanisms": MECHANISM_LABELS,
+            "buckets": BUCKET_LABELS,
+            "params": PARAM_LABELS,
+        },
+        "param_groups": [
+            {"title": t, "keys": [k for k in _params.to_dict() if any(k.startswith(p) for p in ps)]}
+            for t, ps in PARAM_GROUPS
+        ],
     }
 
 

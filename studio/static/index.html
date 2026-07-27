@@ -290,18 +290,18 @@ details.more div{font-size:12px;color:#9aa3b5;margin-top:7px;line-height:1.75}
        标注时你不知道关系，也不应该知道。关系条件化留给下游的确定性层。</p>
     <div class="steps">
       <span><b>1</b> 填名字</span>
-      <span><b>2</b> 选维度（先标 intimacy_bid，它最重要）</span>
+      <span><b>2</b> 选维度（先标<b>亲密度</b>，它最重要）</span>
       <span><b>3</b> <kbd>←</kbd><kbd>→</kbd><kbd>↓</kbd> 连续判断</span>
       <span><b>4</b> 每条至少 3 次比较后看尺度</span>
     </div>
     <details class="more"><summary>四个维度分别是什么意思？</summary><div>
-      <b>intimacy_bid 亲密度</b>[0,1] —— 这句话隐含多亲密。<u>最重要</u>，它是失配机制的输入，
+      <b>亲密度</b> <code>intimacy_bid</code> [0,1] —— 这句话隐含多亲密。<u>最重要</u>，它是失配机制的输入，
       标错会直接把「亲近」判成「越界」。注意<b>亲密度与是否合适无关</b>：陌生人说「宝贝」
       亲密度仍是 0.8，不合适这件事由关系层判定。<br>
-      <b>affiliation_bid 亲和</b>[-1,1] —— 敌意 ←→ 亲近。<br>
-      <b>dominance_bid 支配</b>[-1,1] —— 顺从 ←→ 支配。<u>最容易标错</u>，别和「语气强硬」混淆：
+      <b>亲和</b> <code>affiliation_bid</code> [-1,1] —— 敌意 ←→ 亲近。<br>
+      <b>支配</b> <code>dominance_bid</code> [-1,1] —— 顺从 ←→ 支配。<u>最容易标错</u>，别和「语气强硬」混淆：
       「你真没用」是敌意+支配，「我不知道该怎么办」是中性+顺从。<br>
-      <b>distress_level 痛苦</b>[0,1] —— 对方<u>自身</u>的处境有多难受，与敌意无关。<br>
+      <b>痛苦</b> <code>distress_level</code> [0,1] —— 对方<u>自身</u>的处境有多难受，与敌意无关。<br>
       拿不准就选「相当」，不要硬分高下。完整说明见「标注指南」。
     </div></details>
   </div>
@@ -326,7 +326,9 @@ details.more div{font-size:12px;color:#9aa3b5;margin-top:7px;line-height:1.75}
   </div>
 
   <div class="card" id="cmpBox">
-    <h3>哪一句在 <span id="dimLabel" style="color:var(--accent)">—</span> 上更高？</h3>
+    <h3 style="font-size:15px;text-transform:none;letter-spacing:0;color:var(--fg)">
+      哪一句的<span id="dimLabel" style="color:var(--accent)">—</span>更高？</h3>
+    <div class="hint" id="dimHint" style="margin:-4px 0 6px"></div>
     <div class="cmp">
       <div class="side" id="sideL">—</div>
       <div class="mid">
@@ -482,7 +484,13 @@ details.more div{font-size:12px;color:#9aa3b5;margin-top:7px;line-height:1.75}
 <script>
 const $=id=>document.getElementById(id);
 const CH=['valence','arousal','dominance','concern','affiliation','threat'];
-const CH_ZH={valence:'效价',arousal:'唤起',dominance:'主导',concern:'关切',affiliation:'亲和',threat:'戒备'};
+let L={dimensions:{},channels:{},mechanisms:{},buckets:{},params:{}};
+// 界面上不出现原始字段名 —— 查不到就退回原名，至少不报错
+const CH_ZH=new Proxy({},{get:(_,k)=>L.channels[k]||k});
+const zhDim=k=>(L.dimensions[k]||{}).zh||k;
+const zhMech=k=>L.mechanisms[k]||k;
+const zhBucket=k=>L.buckets[k]||k;
+const zhTone=t=>{const[c,b]=t.split(':');return `${CH_ZH[c]}·${zhBucket(b)}`};
 let META=null, HISTORY=[], LAST=null, JOB=null, JOB_OFFSET=0, PAIR=null, RATE_ITEM=null, RATE_T0=0;
 
 function toast(m,err){const t=$('toast');t.textContent=m;t.className='toast show'+(err?' err':'');
@@ -503,13 +511,15 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
 // ───────── 启动
 (async function init(){
   META=await api('/api/meta');
+  L=META.labels;
   $('relation').innerHTML=META.relations.map(r=>
     `<option value="${r.key}">${r.key} · 亲密上限 ${r.intimacy_permitted}</option>`).join('');
   $('relation').value='friend';
   $('persona').innerHTML=META.personas.map(p=>`<option value="${p.key}">${p.key} — ${p.description}</option>`).join('');
   $('persona').value='warm';
   $('relation').onchange=showRel; showRel();
-  $('annoDim').innerHTML=META.comparable.map(d=>`<option value="${d}">${d}</option>`).join('');
+  $('annoDim').innerHTML=META.comparable.map(d=>
+    `<option value="${d.key}">${d.zh}</option>`).join('');
   $('ctxBoxes').innerHTML=['task_succeeded','task_failed','user_repeated_query','user_repaired']
     .map(k=>`<label style="margin:3px 0"><input type="checkbox" data-ctx="${k}"> ${k}</label>`).join('');
   $('legend').innerHTML=CH.map(c=>
@@ -560,22 +570,24 @@ function addMsg(t,cls){const d=document.createElement('div');d.className='msg '+
 function renderTurn(r){
   const m=r.user_move;
   $('moveOut').innerHTML=
-    `亲和 <b>${m.affiliation_bid.toFixed(2)}</b> · 支配 <b>${m.dominance_bid.toFixed(2)}</b> · `+
-    `亲密 <b>${m.intimacy_bid.toFixed(2)}</b><br>痛苦 ${m.distress_level.toFixed(2)} · `+
+    `亲密度 <b>${m.intimacy_bid.toFixed(2)}</b> · 亲和 <b>${m.affiliation_bid.toFixed(2)}</b> · `+
+    `支配 <b>${m.dominance_bid.toFixed(2)}</b><br>痛苦 ${m.distress_level.toFixed(2)} · `+
     `强度 ${m.intensity.toFixed(2)} · 置信 ${m.confidence.toFixed(2)}`+
-    (m.directed_at_agent?'':'<br><span class="tag">指向第三方</span>');
+    (m.directed_at_agent?'':'<br><span class="tag">指向第三方，不针对 agent</span>');
   renderChannels(r.state);
   const t=r.trace;
   $('traceOut').innerHTML=`失配 <b>${t.mismatch>=0?'+':''}${t.mismatch.toFixed(2)}</b> · `+
     `亲近门 ${t.warmth_gate.toFixed(2)} / 越界门 ${t.breach_gate.toFixed(2)}<br>`+
-    `机制：${t.fired.join(', ')||'—'}`+
+    `机制：${t.fired.map(zhMech).join('、')||'—'}`+
     (t.ceiling_clamped.length?`<br><span class="warn">天花板生效：${t.ceiling_clamped}</span>`:'')+
     (t.repair_applied?'<br><span class="ok">修复通路生效</span>':'')+
     (t.habituation_count>0?`<br>习惯化计数 ${t.habituation_count.toFixed(1)}`:'');
   const a=r.prompt.actions;
   $('actionsOut').innerHTML=(a.chosen.map(x=>`<span class="tag act">${x.label}</span>`).join('')||'<span class="dim">无</span>')
-    +(a.suppressed.length?'<br>'+a.suppressed.map(x=>`<span class="tag sup">${x}</span>`).join(''):'')
-    +`<div class="dim mono" style="margin-top:7px;font-size:11px">语气 ${r.prompt.tone_hits.join(', ')||'—'}<br>`
+    +(a.suppressed.length?'<br><span class="dim" style="font-size:11px">被压制：</span>'+
+      a.suppressed.map(x=>{const act=(META.actions.find(y=>y.key===x)||{});
+        return `<span class="tag sup">${act.label||x}</span>`}).join(''):'')
+    +`<div class="dim" style="margin-top:7px;font-size:11.5px">语气：${r.prompt.tone_hits.map(zhTone).join('、')||'—'}<br>`
     +`生成 ${JSON.stringify(r.prompt.generation)}</div>`;
   const d=r.display;
   $('displayOut').innerHTML=d.mood==='hidden'?'<span class="dim">未启用</span>':
@@ -596,7 +608,7 @@ function renderChannels(s){
     const bpct=(spec.baseline-spec.lo)/(spec.hi-spec.lo)*100;
     const [lo,hi]=spec.thresholds;
     const bk=v>hi?'high':v<lo?'low':'medium';
-    return `<div class="chan"><span class="name">${CH_ZH[c]}</span>
+    return `<div class="chan"><span class="name" title="${spec.note||''}">${CH_ZH[c]}</span>
       <div class="track"><div class="base" style="left:${bpct}%"></div>
       <div class="fill" style="left:0;width:${pct}%;background:var(--${c});opacity:.85"></div></div>
       <span class="val">${v>=0?'':''}${v.toFixed(2)}<span class="bk ${bk}">${bk[0]}</span></span></div>`;
@@ -624,18 +636,21 @@ $('btnMem').onclick=async()=>{
 
 // ───────── 参数调校
 function buildParams(){
-  const groups={'失配门控':['mismatch_softness','warmth_to','breach_to'],'敌意':['hostility_'],
-    '互补性':['complement_'],'共情':['distress_to'],'业务事件':['success_to','failure_to','repeated_query','slow_'],
-    '交叉抑制':['threat_inhibits','affiliation_inhibits'],'习惯化':['habituation_'],
-    '修复与饱和':['repair_','headroom_']};
   const used=new Set();
-  $('paramGrid').innerHTML=Object.entries(groups).map(([title,prefixes])=>{
-    const keys=Object.keys(META.params).filter(k=>prefixes.some(p=>k.startsWith(p))&&!used.has(k));
+  $('paramGrid').innerHTML=META.param_groups.map(g=>{
+    const keys=g.keys.filter(k=>!used.has(k));
     keys.forEach(k=>used.add(k));
     if(!keys.length)return '';
-    return `<div class="card"><h3>${title}</h3>`+keys.map(k=>
-      `<div class="row" style="margin:5px 0"><span class="mono dim" style="flex:1;font-size:11.5px">${k}</span>
-       <input type="number" step="0.05" data-param="${k}" value="${META.params[k]}" style="width:96px"></div>`).join('')+'</div>';
+    return `<div class="card"><h3 style="text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--fg)">${g.title}</h3>`
+      +keys.map(k=>{
+        const step=k.endsWith('_ms')?100:0.05;
+        return `<div style="margin:9px 0">
+          <div class="row" style="gap:8px">
+            <span style="flex:1;font-size:12.5px">${L.params[k]||k}</span>
+            <input type="number" step="${step}" data-param="${k}" value="${META.params[k]}" style="width:100px">
+          </div>
+          <div class="mono" style="font-size:10.5px;color:#5f6779">${k}</div></div>`}).join('')
+      +'</div>';
   }).join('');
 }
 $('btnApplyParams').onclick=async()=>{
@@ -691,7 +706,10 @@ $('annotator').onchange=loadAnno;
 async function loadAnno(){
   const who=$('annotator').value.trim(); if(!who){$('annoStats').textContent='先填标注者名字';return}
   if($('annoMode').value==='compare'){
-    const dim=$('annoDim').value; $('dimLabel').textContent=dim;
+    const dim=$('annoDim').value;
+    const info=META.comparable.find(d=>d.key===dim)||{zh:dim,hint:'',note:''};
+    $('dimLabel').textContent=info.zh;
+    $('dimHint').innerHTML=info.hint+(info.note?`<br><b style="color:var(--warn)">${info.note}</b>`:'');
     const r=await api(`/api/annotate/pair?dimension=${dim}&annotator=${encodeURIComponent(who)}`);
     PAIR=r.pair; renderStats(r.stats);
     if(!PAIR){$('sideL').textContent='（没有更多可比较的组合）';$('sideR').textContent='—';return}
@@ -704,9 +722,9 @@ async function loadAnno(){
     $('rateItem').innerHTML=esc(RATE_ITEM.utterance)+
       (RATE_ITEM.crisis_hint_tier===2?' <span class="tag crisis">关键词层判为危机</span>':
        RATE_ITEM.crisis_hint_tier===1?' <span class="tag crisis">含模糊绝望信号</span>':'');
-    const R={affiliation_bid:[-1,1],dominance_bid:[-1,1],intimacy_bid:[0,1],distress_level:[0,1],intensity:[0,1]};
+    const R={intimacy_bid:[0,1],affiliation_bid:[-1,1],dominance_bid:[-1,1],distress_level:[0,1],intensity:[0,1]};
     $('rateSliders').innerHTML=Object.entries(R).map(([k,[lo,hi]])=>
-      `<div class="chan"><span class="name">${k}</span>
+      `<div class="chan"><span class="name" title="${(L.dimensions[k]||{}).hint||''}">${zhDim(k)}</span>
        <input type="range" data-r="${k}" min="${lo}" max="${hi}" step="0.05" value="${RATE_ITEM.suggestion[k]??0}"
         oninput="this.nextElementSibling.textContent=(+this.value).toFixed(2)" style="width:100%">
        <span class="val">${(RATE_ITEM.suggestion[k]??0).toFixed(2)}</span></div>`).join('');
@@ -720,8 +738,8 @@ function renderStats(s){$('statPill').textContent=`${s.rated}/${s.items} 已评�
     '先导入真实会话（评估集只能来自 real_session），或载入内置的 146 条示例先熟悉流程。</div>'+
     '<button class="btn primary" onclick="document.getElementById(\'btnImportOpen\').click()">导入数据</button></div>';return}
   $('annoStats').innerHTML=`条目 ${s.items} · 已评分 ${s.rated} · 跳过 ${s.skipped} · 评估集 ${s.golden}<br>`+
-    `比较：${Object.entries(s.comparisons_by_dimension).map(([k,v])=>`${k} ${v}`).join(' · ')}<br>`+
-    `来源：${JSON.stringify(s.by_source)} · 危机标记 ${s.crisis_flagged}`}
+    `比较：${Object.entries(s.comparisons_by_dimension).map(([k,v])=>`${zhDim(k)} ${v}`).join(' · ')}<br>`+
+    `来源：${Object.entries(s.by_source).map(([k,v])=>`${k} ${v} 条`).join(' · ')||'—'} · 危机标记 ${s.crisis_flagged}`}
 
 async function compare(winner){
   if(!PAIR)return;

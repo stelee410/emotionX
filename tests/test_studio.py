@@ -37,7 +37,7 @@ def test_meta_exposes_everything_ui_needs(client: TestClient) -> None:
     assert len(m["channels"]) == 6
     assert len(m["relations"]) == 8
     assert m["personas"] and m["actions"] and m["moods"]
-    assert set(m["comparable"]) <= {
+    assert {d["key"] for d in m["comparable"]} <= {
         "intimacy_bid", "affiliation_bid", "dominance_bid", "distress_level"
     }
     for ch in m["channels"]:
@@ -331,6 +331,59 @@ def test_agreement_detects_disagreement() -> None:
         {"left_id": 1, "right_id": 2, "winner": "right", "annotator": "B"},
     ]
     assert agreement(comps)["raw_agreement"] == 0.0
+
+
+# ------------------------------------------------------------------ 中文词表
+def test_every_param_has_a_chinese_label(client: TestClient) -> None:
+    """★ 加一个参数就必须同时加一条中文说明 —— 少一条，UI 上就会露出英文字段名。"""
+    m = client.get("/api/meta").json()
+    missing = sorted(set(m["params"]) - set(m["labels"]["params"]))
+    assert not missing, f"这些参数缺中文标签: {missing}"
+
+
+def test_every_param_is_in_exactly_one_group(client: TestClient) -> None:
+    """漏分组的参数在面板上根本不会显示出来。"""
+    m = client.get("/api/meta").json()
+    grouped: list[str] = [k for g in m["param_groups"] for k in g["keys"]]
+    assert sorted(grouped) == sorted(m["params"]), "参数分组不完整或有重复"
+
+
+def test_every_channel_and_mechanism_has_a_label(client: TestClient) -> None:
+    m = client.get("/api/meta").json()
+    for ch in m["channels"]:
+        assert ch["zh"] and ch["zh"] != ch["name"], ch["name"]
+    assert set(m["labels"]["buckets"]) == {"high", "medium", "low"}
+    from affect.appraisal import RelationalAppraisal
+    from affect.moves import TurnContext, UserMove
+    from affect.relation import RelationType, preset
+
+    # 把所有能触发的机制跑出来，逐个确认有中文
+    eng = RelationalAppraisal()
+    fired: set[str] = set()
+    for move, ctx in (
+        (UserMove(affiliation_bid=0.8, intimacy_bid=0.9, intensity=0.8), TurnContext()),
+        (UserMove(affiliation_bid=-0.8, intimacy_bid=0.1, intensity=0.8), TurnContext()),
+        (UserMove(distress_level=0.9, intensity=0.7), TurnContext()),
+        (UserMove(dominance_bid=0.8, intensity=0.5), TurnContext(task_succeeded=True)),
+        (UserMove(intensity=0.3), TurnContext(task_failed=True, user_repeated_query=True, latency_ms=9000)),
+    ):
+        for rt in (RelationType.PARTNER, RelationType.STRANGER):
+            _, f, _ = eng.delta(move, ctx, preset(rt))
+            fired.update(f)
+    missing = sorted(fired - set(m["labels"]["mechanisms"]))
+    assert not missing, f"这些机制缺中文标签: {missing}"
+
+
+def test_comparable_dimensions_carry_help_text(client: TestClient) -> None:
+    """下拉框里不能只有字段名 —— 标注者不该先去查字段含义。"""
+    m = client.get("/api/meta").json()
+    for d in m["comparable"]:
+        assert d["zh"] != d["key"], d["key"]
+        assert len(d["hint"]) > 10, d["key"]
+    # 两个最容易标错的必须有额外提醒
+    by_key = {d["key"]: d for d in m["comparable"]}
+    assert by_key["intimacy_bid"]["note"]
+    assert by_key["dominance_bid"]["note"]
 
 
 # ------------------------------------------------------------------ 数据集
