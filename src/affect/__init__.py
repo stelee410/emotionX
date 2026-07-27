@@ -1,41 +1,82 @@
-"""Affective Response Simulation System.
+"""emotionX —— 关系条件化的情感反应引擎。
 
-L1 感知（可训练） → L2 状态机（系统核心，纯计算） → L3 表达（prompt 组装）
+    L0 关系解析 → L1 感知（可训练）→ L2 关系性评价（核心，纯计算）→ L3a 表达 / L3b 显示
+
+同一句输入在不同关系设定下产生方向相反的情感反应：关系不改变评价规则，
+它改变规则据以评价的**参照系**。
 """
 
-from .expression import build_affect_prompt
-from .perception import HeuristicPerceiver, OnnxPerceiver, load_perceiver
-from .persona import Persona, list_personas, load_persona
-from .pipeline import AffectPipeline, TurnResult, process_turn
-from .safety import BypassKind, evaluate_safety
-from .state_machine import AppraisalRules, StateMachine
-from .store import InMemoryStateStore, RedisStateStore, TraceLogger, make_store
-from .types import AgentAffect, ConversationEvent, StrategyLabel, TurnTrace, UserAffect
+from .actions import ActionPlan, select_actions
+from .appraisal import (
+    AppraisalParams,
+    AppraisalTrace,
+    RelationalAppraisal,
+    SessionAffect,
+)
+from .channels import CHANNEL_NAMES, CHANNELS, AffectState, bucket_of
+from .display import DisplayState, DisplayTracker, render
+from .domains import (
+    SafetyDecision,
+    SafetyDomainError,
+    evaluate_turn_safety,
+    safety_block,
+    validate_frame,
+)
+from .expression import AffectPrompt, build_prompt
+from .heuristic import HeuristicPerceiver, Perceiver
+from .memory import HttpMemory, ManualMemory, MemoryQuery, NullMemory
+from .moves import TurnContext, UserMove
+from .persona import Persona, get_persona, list_personas
+from .pipeline import AffectPipeline, SessionRecord, TurnResult, process_turn
+from .relation import (
+    RelationalFrame,
+    RelationType,
+    SafetyProfile,
+    list_relation_types,
+    preset,
+)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
+    "CHANNELS",
+    "CHANNEL_NAMES",
+    "ActionPlan",
     "AffectPipeline",
-    "AgentAffect",
-    "AppraisalRules",
-    "BypassKind",
-    "ConversationEvent",
+    "AffectPrompt",
+    "AffectState",
+    "AppraisalParams",
+    "AppraisalTrace",
+    "DisplayState",
+    "DisplayTracker",
     "HeuristicPerceiver",
-    "InMemoryStateStore",
-    "OnnxPerceiver",
+    "HttpMemory",
+    "ManualMemory",
+    "MemoryQuery",
+    "NullMemory",
+    "Perceiver",
     "Persona",
-    "RedisStateStore",
-    "StateMachine",
-    "StrategyLabel",
-    "TraceLogger",
+    "RelationType",
+    "RelationalAppraisal",
+    "RelationalFrame",
+    "SafetyDecision",
+    "SafetyDomainError",
+    "SafetyProfile",
+    "SessionAffect",
+    "SessionRecord",
+    "TurnContext",
     "TurnResult",
-    "TurnTrace",
-    "UserAffect",
-    "build_affect_prompt",
-    "evaluate_safety",
+    "UserMove",
+    "bucket_of",
+    "build_prompt",
+    "evaluate_turn_safety",
+    "get_persona",
     "list_personas",
-    "load_perceiver",
-    "load_persona",
-    "make_store",
+    "list_relation_types",
+    "preset",
     "process_turn",
+    "render",
+    "safety_block",
+    "select_actions",
+    "validate_frame",
 ]

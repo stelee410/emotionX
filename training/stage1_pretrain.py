@@ -35,7 +35,6 @@ from training.model import (  # noqa: E402
     compute_class_weights,
     embedding_size,
     load_tokenizer,
-    multitask_loss,
     write_vocab_file,
 )
 
@@ -83,18 +82,11 @@ def evaluate_head(
     model.eval()
     y_true: list[int] = []
     y_pred: list[int] = []
-    vad_err = 0.0
-    vad_n = 0.0
     for batch in loader:
         b = batch.to(device)
-        logits, vad, _ = model.forward_aux(
-            head, b.input_ids, b.attention_mask, b.token_type_ids
-        )
+        logits = model.forward_aux(head, b.input_ids, b.attention_mask, b.token_type_ids)
         y_true.extend(b.labels.tolist())
         y_pred.extend(logits.argmax(dim=-1).tolist())
-        err = ((vad - b.vad_target).abs().mean(dim=-1) * b.vad_mask).sum().item()
-        vad_err += err
-        vad_n += b.vad_mask.sum().item()
     acc = (
         sum(1 for t, p in zip(y_true, y_pred, strict=False) if t == p) / len(y_true)
         if y_true
@@ -103,7 +95,6 @@ def evaluate_head(
     return {
         "macro_f1": macro_f1(y_true, y_pred, num_classes),
         "accuracy": acc,
-        "vad_mae": vad_err / vad_n if vad_n else float("nan"),
         "n": len(y_true),
     }
 
@@ -149,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
 
     model = AffectEncoder(
         base_model=args.base_model,
-        strategy_labels=None,
+        move_head=False,
         aux_heads=specs,
         vocab_size=embedding_size(tokenizer),
     ).to(device)
@@ -211,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         model.train()
         iters = {name: iter(dl) for name, dl in train_loaders.items()}
         remaining = {name: len(dl) for name, dl in train_loaders.items()}
-        running = {"total": 0.0, "cls": 0.0, "vad": 0.0, "int": 0.0, "n": 0}
+        running = {"total": 0.0, "n": 0}
         while any(v > 0 for v in remaining.values()):
             pool = [name for name, v in remaining.items() if v > 0]
             # 按剩余步数加权，让所有数据集在 epoch 内均匀铺开
@@ -220,51 +211,34 @@ def main(argv: list[str] | None = None) -> int:
             remaining[name] -= 1
 
             b = batch.to(device)
-            logits, vad, intensity = model.forward_aux(
-                name, b.input_ids, b.attention_mask, b.token_type_ids
+            logits = model.forward_aux(name, b.input_ids, b.attention_mask, b.token_type_ids)
+            loss_value = torch.nn.functional.cross_entropy(
+                logits, b.labels, weight=class_weights[name]
             )
-            loss = multitask_loss(
-                logits=logits,
-                vad_pred=vad,
-                intensity_pred=intensity,
-                labels=b.labels,
-                vad_target=b.vad_target,
-                vad_mask=b.vad_mask,
-                intensity_target=b.intensity_target,
-                intensity_mask=b.intensity_mask,
-                sample_weight=b.sample_weight,
-                class_weight=class_weights[name],
-            )
-            loss.total.backward()
+            loss_value.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
 
-            running["total"] += float(loss.total.detach())
-            running["cls"] += float(loss.cls)
-            running["vad"] += float(loss.vad)
-            running["int"] += float(loss.intensity)
+            running["total"] += float(loss_value.detach())
             running["n"] += 1
             global_step += 1
             if global_step % args.log_every == 0:
                 n = running["n"]
                 print(
                     f"  e{epoch} step {global_step}/{total_steps} "
-                    f"loss={running['total'] / n:.4f} cls={running['cls'] / n:.4f} "
-                    f"vad={running['vad'] / n:.4f} int={running['int'] / n:.4f} "
-                    f"lr={scheduler.get_last_lr()[0]:.2e} "
-                    f"({time.time() - t0:.0f}s)"
+                    f"loss={running['total'] / n:.4f} "
+                    f"lr={scheduler.get_last_lr()[0]:.2e} ({time.time() - t0:.0f}s)"
                 )
-                running = {"total": 0.0, "cls": 0.0, "vad": 0.0, "int": 0.0, "n": 0}
+                running = {"total": 0.0, "n": 0}
 
         epoch_metrics = {"epoch": epoch}
         for name, dl in dev_loaders.items():
             m = evaluate_head(model, name, dl, device, len(vocabs[name]))
             epoch_metrics[name] = m
             print(
-                f"  [dev] {name}: macro-F1={m['macro_f1']:.4f} acc={m['accuracy']:.4f} "
-                f"vad_mae={m['vad_mae']:.4f} (n={m['n']})"
+                f"  [dev] {name}: macro-F1={m['macro_f1']:.4f} acc={m['accuracy']:.4f} (n={m['n']})"
             )
         history.append(epoch_metrics)
         model.train()

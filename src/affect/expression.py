@@ -1,206 +1,223 @@
-"""§5 L3 表达层：状态 → 自然语言行为指令 + 生成参数。
+"""L3a 表达层 —— 状态 → 给主 LLM 的行为指令 + 生成参数。
 
-核心原则（§5.1）：**绝不把 VAD 数值直接塞进 prompt。** 连续状态先离散成 bucket，
-每个 bucket 对应一段具体的行为指令。
+核心原则：**绝不把通道数值塞进 prompt。** "你当前的 threat 是 0.78" 这类写法
+对 LLM 无效且会产生怪异输出。连续状态先离散成 bucket，再转成具体的行为指令。
 
-组装顺序（§5.3）：
-  1. persona 基础人设（静态）
-  2. concern bucket directive
-  3. dominance bucket directive
-  4. overrides（若命中，覆盖上述冲突项）
-  5. 安全约束（§9，恒定注入，不可被覆盖）
+组装顺序（后面的不能被前面的覆盖）：
 
-生成参数取所有命中 bucket 中的**最保守值**。
+    1. 人格静态设定（persona.style）
+    2. 关系设定（自然语言描述 + agent 目标）
+    3. 动作清单（actions.py：本轮该做什么）
+    4. 语气指令（bucket → 措辞方式）
+    5. 亲密度跟随上限（安全，随会话变化）
+    6. 安全域约束（domains.py，恒定注入，不可被覆盖）
+
+危机时整条链路 bypass：只保留人格 + 危机流程 + 安全约束。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
-import yaml
-
-from .persona import CONFIG_DIR, Persona
-from .safety import (
+from .actions import ActionPlan, select_actions
+from .channels import AffectState, bucket_of
+from .domains import (
     CRISIS_GENERATION_PARAMS,
     CRISIS_RESPONSE_DIRECTIVE,
-    BypassKind,
-    SafetyVerdict,
+    SafetyDecision,
     safety_block,
 )
-from .types import AgentAffect, ConversationEvent, UserAffect
+from .persona import Persona
+from .relation import RelationalFrame
 
-DEFAULT_TEMPLATES_PATH = CONFIG_DIR / "expression_templates.yaml"
+# 语气指令：{通道: {档位: 指令}}。只讲**怎么说**，做什么在 actions.py。
+TONE: dict[str, dict[str, str]] = {
+    "arousal": {
+        "high": "句子短、节奏紧，去掉修饰性铺陈。",
+        "low": "语气平缓，可以稍微展开。",
+    },
+    "valence": {
+        "high": "用词可以明快一些，但不夸张。",
+        "low": "保持平稳中性，不要把低落带进措辞；服务质量不受影响。",
+    },
+    "affiliation": {
+        "high": "用词自然亲近，可以用「我们」，可以提到之前聊过的事。",
+        "low": "用词保持中性，不用亲昵称呼，不主动拉近。",
+    },
+    "threat": {
+        "high": "语气转平，不带情绪色彩，不解释、不辩解、不追问。",
+        "medium": "去掉寒暄与铺垫，只回应被问到的部分。",
+    },
+    "concern": {
+        "high": "语速放缓，句子短一些，不要使用感叹号。",
+    },
+    "dominance": {
+        "high": "用陈述句，少用反问和征询。",
+        "low": "多用疑问和选项，少下判断。",
+    },
+}
 
-# §5.3：这些参数「越小越保守」，多 bucket 命中时取 min
-CONSERVATIVE_MIN_KEYS = ("temperature", "top_p", "max_sentences")
+# 通道间互斥：某个档位命中时压制另一些通道的语气指令。
+# 只看 agent 自身状态，L1 判不准时依然生效。
+TONE_CONFLICTS: tuple[tuple[dict[str, str], tuple[str, ...]], ...] = (
+    # 戒备时不该同时出现"用词亲近"和"明快"
+    ({"threat": "high"}, ("affiliation", "valence")),
+    ({"threat": "medium"}, ("affiliation",)),
+    # 高关切时不该同时出现"用词明快"
+    ({"concern": "high"}, ("valence",)),
+)
 
-# bucket directive 的拼装顺序（concern → dominance → arousal → valence）
-DIMENSION_ORDER = ("concern", "dominance", "arousal", "valence")
+DEFAULT_GENERATION: dict[str, Any] = {"temperature": 0.8, "top_p": 0.9, "max_sentences": 6}
+CONSERVATIVE_KEYS = ("temperature", "top_p", "max_sentences")
 
+# bucket → 生成参数（取所有命中项里最保守的）
+GENERATION_BY_BUCKET: dict[tuple[str, str], dict[str, Any]] = {
+    ("threat", "high"): {"temperature": 0.4, "max_sentences": 3},
+    ("threat", "medium"): {"temperature": 0.6, "max_sentences": 4},
+    ("concern", "high"): {"temperature": 0.6, "max_sentences": 4},
+    ("arousal", "high"): {"max_sentences": 4},
+    ("affiliation", "high"): {"temperature": 0.85},
+}
 
-@dataclass
-class ExpressionTemplates:
-    concern: dict[str, dict[str, Any]] = field(default_factory=dict)
-    dominance: dict[str, dict[str, Any]] = field(default_factory=dict)
-    arousal: dict[str, dict[str, Any]] = field(default_factory=dict)
-    valence: dict[str, dict[str, Any]] = field(default_factory=dict)
-    overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
-    conflicts: list[dict[str, Any]] = field(default_factory=list)
-    medical_bypass: dict[str, Any] = field(default_factory=dict)
-    defaults: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def load(cls, path: str | Path | None = None) -> ExpressionTemplates:
-        p = Path(path) if path else DEFAULT_TEMPLATES_PATH
-        data = yaml.safe_load(Path(p).read_text(encoding="utf-8")) or {}
-        return cls(
-            concern=data.get("concern") or {},
-            dominance=data.get("dominance") or {},
-            arousal=data.get("arousal") or {},
-            valence=data.get("valence") or {},
-            overrides=data.get("overrides") or {},
-            conflicts=data.get("conflicts") or [],
-            medical_bypass=data.get("medical_bypass") or {},
-            defaults=data.get("defaults") or {},
-        )
-
-    def dimension(self, name: str) -> dict[str, dict[str, Any]]:
-        return getattr(self, name)
+INTIMACY_CAP_NOTE = (
+    "本轮你可以表达的亲近程度上限：{level}。不要超过它 —— "
+    "对方还没有表达到那个程度。"
+)
+INTIMACY_LEVELS: tuple[tuple[float, str], ...] = (
+    (0.15, "公事公办，不带私人色彩"),
+    (0.35, "友好但有距离"),
+    (0.55, "熟络，可以随意一些"),
+    (0.75, "亲近，可以自然表达关心"),
+    (1.01, "很亲密"),
+)
 
 
-@lru_cache(maxsize=8)
-def load_templates(path: str | None = None) -> ExpressionTemplates:
-    return ExpressionTemplates.load(path)
+def intimacy_level_text(cap: float) -> str:
+    for threshold, text in INTIMACY_LEVELS:
+        if cap < threshold:
+            return text
+    return INTIMACY_LEVELS[-1][1]
 
 
 @dataclass
 class AffectPrompt:
-    """L3 输出。text 直接注入主 LLM 的 system 消息尾部（§10 待决项 #4 默认值）。"""
+    """L3a 输出。text 拼到主 LLM 的 system 消息尾部。"""
 
     text: str
     generation: dict[str, Any]
-    bypass: BypassKind = BypassKind.NONE
-    matched: list[str] = field(default_factory=list)
+    actions: ActionPlan = field(default_factory=ActionPlan)
+    tone_hits: list[str] = field(default_factory=list)
     bucket: str = ""
+    crisis: bool = False
+    # 静态段与动态段分开返回，便于调用方保住 prompt cache：
+    # 静态部分（人格+关系+安全）可缓存，只有 dynamic 每轮变。
+    static_prefix: str = ""
+    dynamic_suffix: str = ""
 
     def as_tuple(self) -> tuple[str, dict[str, Any]]:
         return self.text, self.generation
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "text": self.text,
+            "static_prefix": self.static_prefix,
+            "dynamic_suffix": self.dynamic_suffix,
+            "generation": self.generation,
+            "actions": self.actions.to_dict(),
+            "tone_hits": list(self.tone_hits),
+            "bucket": self.bucket,
+            "crisis": self.crisis,
+        }
+
 
 def _merge_generation(target: dict[str, Any], incoming: dict[str, Any]) -> None:
-    """取最保守值：CONSERVATIVE_MIN_KEYS 取 min，其余后写覆盖。"""
-    for key, value in (incoming or {}).items():
-        if key in CONSERVATIVE_MIN_KEYS and key in target:
+    for key, value in incoming.items():
+        if key in CONSERVATIVE_KEYS and key in target:
             target[key] = min(target[key], value)
         else:
             target[key] = value
 
 
-def _hit_overrides(user: UserAffect, event: ConversationEvent) -> list[str]:
-    """决定命中哪些 override（顺序即优先级，后者可再压制前者的维度）。"""
-    hits: list[str] = []
-    if user.strategy == "frustration" and user.is_high_intensity:
-        hits.append("user_frustration_high")
-    if user.strategy == "distress" and user.is_high_intensity:
-        hits.append("user_distress_high")
-    if event.task_failed:
-        hits.append("task_failed")
-    return hits
+def _relation_block(frame: RelationalFrame) -> str:
+    lines = [f"【你们的关系】{frame.description or frame.relation_type.value}"]
+    if frame.agent_goals:
+        lines.append("你在这段关系里的目标：" + "；".join(frame.agent_goals) + "。")
+    if frame.hard_boundaries:
+        lines.append("不可越过的界限：" + "；".join(frame.hard_boundaries) + "。")
+    return "\n".join(lines)
 
 
-def build_affect_prompt(
-    state: AgentAffect,
-    user: UserAffect,
+def build_prompt(
+    state: AffectState,
+    frame: RelationalFrame,
     persona: Persona,
-    event: ConversationEvent | None = None,
-    safety: SafetyVerdict | None = None,
-    templates: ExpressionTemplates | None = None,
+    safety: SafetyDecision,
+    memory_notes: tuple[str, ...] = (),
 ) -> AffectPrompt:
-    event = event or ConversationEvent()
-    tpl = templates or load_templates()
-    gen: dict[str, Any] = dict(tpl.defaults)
+    gen = dict(DEFAULT_GENERATION)
+    gen["max_sentences"] = round(3 + 6 * persona.verbosity)
 
-    # ---- §9.6 危机：整个情感系统 bypass ----
-    if safety is not None and safety.kind is BypassKind.CRISIS:
-        text = "\n\n".join(
-            [persona.system_persona.strip(), CRISIS_RESPONSE_DIRECTIVE, safety_block()]
-        ).strip()
+    static_parts = [persona.style.strip(), _relation_block(frame)]
+
+    # ---- 危机：整个情感系统 bypass ----
+    if safety.crisis:
         gen.update(CRISIS_GENERATION_PARAMS)
-        return AffectPrompt(
-            text=text, generation=gen, bypass=BypassKind.CRISIS, matched=["crisis"]
-        )
-
-    # ---- §9.4 医疗信息：跳过情感修饰，只留人设 + 中性指令 + 安全约束 ----
-    if safety is not None and safety.kind is BypassKind.MEDICAL:
-        med = tpl.medical_bypass
-        _merge_generation(gen, med.get("generation", {}))
         text = "\n\n".join(
-            [
-                persona.system_persona.strip(),
-                str(med.get("directive", "")).strip(),
-                safety_block(),
-            ]
-        ).strip()
+            [*[p for p in static_parts if p], CRISIS_RESPONSE_DIRECTIVE, safety_block(safety.profile)]
+        )
         return AffectPrompt(
             text=text,
             generation=gen,
-            bypass=BypassKind.MEDICAL,
-            matched=["medical_bypass"],
+            crisis=True,
             bucket=state.to_bucket(),
+            static_prefix="\n\n".join(p for p in static_parts if p),
+            dynamic_suffix=CRISIS_RESPONSE_DIRECTIVE,
         )
 
-    # ---- 常规路径 ----
-    buckets = state.buckets()
-    override_ids = _hit_overrides(user, event)
+    buckets = {name: bucket_of(name, value) for name, value in state}
+
+    # ---- 语气互斥 ----
     suppressed: set[str] = set()
-    for oid in override_ids:
-        suppressed.update(tpl.overrides.get(oid, {}).get("suppress", []) or [])
-    # 维度互斥：只看 agent 状态，L1 判断不准时也生效
-    for rule in tpl.conflicts:
-        when = rule.get("when") or {}
-        if all(buckets.get(dim) == want for dim, want in when.items()):
-            suppressed.update(rule.get("suppress") or [])
+    for condition, targets in TONE_CONFLICTS:
+        if all(buckets.get(ch) == want for ch, want in condition.items()):
+            suppressed.update(targets)
 
-    directives: list[str] = []
-    matched: list[str] = []
-
-    # 2–3. bucket directive（concern → dominance → arousal → valence）
-    for dim in DIMENSION_ORDER:
-        cfg = tpl.dimension(dim).get(buckets[dim], {})
-        # 生成参数即使被 suppress 也要参与"取最保守值"——被压制的是措辞，不是安全性
-        _merge_generation(gen, cfg.get("generation", {}))
-        if dim in suppressed:
+    tone_lines: list[str] = []
+    tone_hits: list[str] = []
+    for channel, by_bucket in TONE.items():
+        bucket = buckets[channel]
+        directive = by_bucket.get(bucket)
+        _merge_generation(gen, GENERATION_BY_BUCKET.get((channel, bucket), {}))
+        if not directive or channel in suppressed:
             continue
-        directive = str(cfg.get("directive", "")).strip()
-        if directive:
-            directives.append(directive)
-            matched.append(f"{dim}:{buckets[dim]}")
+        tone_lines.append(directive)
+        tone_hits.append(f"{channel}:{bucket}")
 
-    # 4. overrides（覆盖冲突项）
-    for oid in override_ids:
-        cfg = tpl.overrides.get(oid, {})
-        _merge_generation(gen, cfg.get("generation", {}))
-        directive = str(cfg.get("directive", "")).strip()
-        if directive:
-            directives.append(directive)
-            matched.append(f"override:{oid}")
+    plan = select_actions(state, frame)
 
+    dynamic: list[str] = []
+    if plan.chosen:
+        dynamic.append("【本轮该做什么】\n" + "\n".join(f"- {d}" for d in plan.directives()))
+    if tone_lines:
+        dynamic.append("【本轮怎么说】\n" + "\n".join(f"- {t}" for t in tone_lines))
     if not persona.allow_emoji:
-        directives.append("不要使用 emoji 或颜文字。")
+        dynamic.append("不要使用 emoji 或颜文字。")
+    dynamic.append(INTIMACY_CAP_NOTE.format(level=intimacy_level_text(safety.intimacy_cap)))
+    if memory_notes:
+        dynamic.append("【可以用到的记忆】\n" + "\n".join(f"- {m}" for m in memory_notes))
 
-    parts = [persona.system_persona.strip()]
-    if directives:
-        parts.append("【本轮表达方式】\n" + "\n".join(f"- {d}" for d in directives))
-    # 5. 安全约束，恒定注入且放在最后（不可被上文覆盖）
-    parts.append(safety_block())
+    static_prefix = "\n\n".join(p for p in static_parts if p)
+    dynamic_suffix = "\n\n".join(dynamic)
+    # 安全约束恒定放在最后，不可被上文覆盖
+    text = "\n\n".join([p for p in (static_prefix, dynamic_suffix) if p] + [safety_block(safety.profile)])
 
     return AffectPrompt(
-        text="\n\n".join(p for p in parts if p).strip(),
+        text=text,
         generation=gen,
-        bypass=BypassKind.NONE,
-        matched=matched,
+        actions=plan,
+        tone_hits=tone_hits,
         bucket=state.to_bucket(),
+        static_prefix=static_prefix,
+        dynamic_suffix=dynamic_suffix,
     )

@@ -1,9 +1,10 @@
 """§3.2 L1 模型：小 encoder + 多头输出。
 
-    head_strategy : 4 分类, CrossEntropy
-    head_vad      : 2 维回归 (valence, arousal), MSE
-    head_intensity: 1 维回归, MSE
-    L = L_strategy + 0.5 * L_vad + 0.3 * L_intensity
+    head_move     : 5 维回归（affiliation/dominance/intimacy/distress/intensity）
+    head_directed : 1 维二分类（这句话是否指向 agent 本人）
+
+    分类标签在 v2 里被废弃了：策略取决于关系，而感知层看不到关系，
+    所以没有任何一个标签是对的。改成回归后 L1 学的是句子本身的属性。
 
 阶段一额外挂「每个数据集一个原生标签头」（§3.3：各数据集用各自原生标签）；
 阶段二丢弃这些头，换上 4 类 StrategyLabel 头。
@@ -14,22 +15,31 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import sys
+from dataclasses import dataclass
 from pathlib import Path
+from pathlib import Path as _P
 from typing import Any
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+sys.path.insert(0, str(_P(__file__).resolve().parents[1] / "src"))
+from affect.targets import (  # noqa: E402
+    DIRECTED_WEIGHT,
+    REGRESSION_TARGETS,
+    TARGET_RANGES,
+    TARGET_WEIGHTS,
+)
 
 BASE_MODEL = "nghuyong/ernie-3.0-nano-zh"
 USER_TOKEN = "[USER]"
 AGENT_TOKEN = "[AGENT]"
 
-# §3.2 联合损失权重
-W_VAD = 0.5
-W_INTENSITY = 0.3
+N_TARGETS = len(REGRESSION_TARGETS)
+# 值域为 [-1,1] 的目标用 tanh，[0,1] 的用 sigmoid —— 约束放进网络，推理侧不用再 clamp
+TANH_MASK: tuple[bool, ...] = tuple(TARGET_RANGES[t][0] < 0 for t in REGRESSION_TARGETS)
 # 先验推出来的 VAD 目标（非人工标注）的降权系数
 PRIOR_VAD_WEIGHT = 0.3
 
@@ -88,12 +98,12 @@ class HeadSpec:
 
 
 class AffectEncoder(nn.Module):
-    """encoder + 多头。ONNX 只导出 strategy / vad / intensity 三个头。"""
+    """encoder + 多头。ONNX 只导出 move 与 directed 两个头。"""
 
     def __init__(
         self,
         base_model: str = BASE_MODEL,
-        strategy_labels: list[str] | None = None,
+        move_head: bool = True,
         aux_heads: list[HeadSpec] | None = None,
         dropout: float = 0.1,
         vocab_size: int | None = None,
@@ -107,12 +117,9 @@ class AffectEncoder(nn.Module):
         hidden = self.config.hidden_size
         self.dropout = nn.Dropout(dropout)
 
-        self.strategy_labels = list(strategy_labels or [])
-        self.head_strategy = (
-            nn.Linear(hidden, len(self.strategy_labels)) if self.strategy_labels else None
-        )
-        self.head_vad = nn.Linear(hidden, 2)
-        self.head_intensity = nn.Linear(hidden, 1)
+        self.has_move_head = bool(move_head)
+        self.head_move = nn.Linear(hidden, N_TARGETS) if move_head else None
+        self.head_directed = nn.Linear(hidden, 1) if move_head else None
 
         self.aux_specs = list(aux_heads or [])
         self.aux_heads = nn.ModuleDict(
@@ -146,18 +153,17 @@ class AffectEncoder(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         token_type_ids: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """ONNX 导出用的签名：返回 (strategy_logits, vad, intensity)。"""
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """ONNX 导出签名：返回 (move[5], directed_logit[1])。"""
         h = self.dropout(self.pooled(input_ids, attention_mask, token_type_ids))
-        if self.head_strategy is None:
-            raise RuntimeError("模型没有 strategy 头（还在阶段一？）")
-        strategy_logits = self.head_strategy(h)
-        vad = self.head_vad(h)
-        # valence ∈ [-1,1] 用 tanh；arousal ∈ [0,1] 用 sigmoid —— 值域约束放进网络，
-        # 免得推理侧还要 clamp。
-        vad = torch.cat([torch.tanh(vad[:, :1]), torch.sigmoid(vad[:, 1:])], dim=-1)
-        intensity = torch.sigmoid(self.head_intensity(h))
-        return strategy_logits, vad, intensity
+        if self.head_move is None or self.head_directed is None:
+            raise RuntimeError("模型没有 move 头（还在阶段一？）")
+        raw = self.head_move(h)
+        cols = [
+            torch.tanh(raw[:, i : i + 1]) if use_tanh else torch.sigmoid(raw[:, i : i + 1])
+            for i, use_tanh in enumerate(TANH_MASK)
+        ]
+        return torch.cat(cols, dim=-1), self.head_directed(h)
 
     def forward_aux(
         self,
@@ -165,19 +171,18 @@ class AffectEncoder(nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         token_type_ids: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
+        """阶段一：某个数据集的原生标签分类头。"""
         h = self.dropout(self.pooled(input_ids, attention_mask, token_type_ids))
-        logits = self.aux_heads[head](h)
-        vad = self.head_vad(h)
-        vad = torch.cat([torch.tanh(vad[:, :1]), torch.sigmoid(vad[:, 1:])], dim=-1)
-        intensity = torch.sigmoid(self.head_intensity(h))
-        return logits, vad, intensity
+        return self.aux_heads[head](h)
 
     # ---- 阶段切换 ----
-    def attach_strategy_head(self, labels: list[str]) -> None:
-        """§3.3 阶段二：丢弃阶段一的分类头，换上 4 类 StrategyLabel 头。"""
-        self.strategy_labels = list(labels)
-        self.head_strategy = nn.Linear(self.config.hidden_size, len(labels))
+    def attach_move_head(self) -> None:
+        """阶段二：丢弃阶段一的原生标签分类头，换上 UserMove 回归头。"""
+        hidden = self.config.hidden_size
+        self.has_move_head = True
+        self.head_move = nn.Linear(hidden, N_TARGETS)
+        self.head_directed = nn.Linear(hidden, 1)
         self.aux_specs = []
         self.aux_heads = nn.ModuleDict()
 
@@ -188,7 +193,8 @@ class AffectEncoder(nn.Module):
         torch.save(self.state_dict(), d / "pytorch_model.bin")
         meta = {
             "base_model": self.base_model,
-            "strategy_labels": self.strategy_labels,
+            "move_head": self.has_move_head,
+            "targets": list(REGRESSION_TARGETS),
             "aux_heads": [{"name": s.name, "labels": s.labels} for s in self.aux_specs],
             "hidden_size": self.config.hidden_size,
             "vocab_size": self.encoder.get_input_embeddings().weight.shape[0],
@@ -206,7 +212,7 @@ class AffectEncoder(nn.Module):
         meta = json.loads((d / "affect_model.json").read_text(encoding="utf-8"))
         model = cls(
             base_model=meta["base_model"],
-            strategy_labels=meta.get("strategy_labels") or None,
+            move_head=bool(meta.get("move_head", True)),
             aux_heads=[HeadSpec(**h) for h in meta.get("aux_heads", [])],
             vocab_size=meta.get("vocab_size"),
         )
@@ -227,66 +233,52 @@ class AffectEncoder(nn.Module):
 @dataclass
 class LossParts:
     total: torch.Tensor
-    cls: torch.Tensor
-    vad: torch.Tensor
-    intensity: torch.Tensor
+    move: torch.Tensor
+    directed: torch.Tensor
     kd: torch.Tensor | None = None
-    extras: dict[str, float] = field(default_factory=dict)
 
 
-def multitask_loss(
-    logits: torch.Tensor,
-    vad_pred: torch.Tensor,
-    intensity_pred: torch.Tensor,
-    labels: torch.Tensor,
-    vad_target: torch.Tensor,
-    vad_mask: torch.Tensor,
-    intensity_target: torch.Tensor,
-    intensity_mask: torch.Tensor,
+def move_loss(
+    pred: torch.Tensor,
+    directed_logit: torch.Tensor,
+    target: torch.Tensor,
+    directed_target: torch.Tensor,
     sample_weight: torch.Tensor | None = None,
-    class_weight: torch.Tensor | None = None,
-    teacher_logits: torch.Tensor | None = None,
+    target_mask: torch.Tensor | None = None,
+    teacher: torch.Tensor | None = None,
     kd_mask: torch.Tensor | None = None,
-    kd_temperature: float = 2.0,
     kd_alpha: float = 0.5,
 ) -> LossParts:
-    """§3.2 联合损失 + §3.4.3 知识蒸馏（T=2.0）。
-
-    vad_mask / intensity_mask 里带的是每样本权重（0 = 无监督），
-    这样先验来的 VAD 目标可以只算 0.3 的权重。
-    """
-    ce = F.cross_entropy(logits, labels, weight=class_weight, reduction="none")
-    if sample_weight is not None:
-        ce = ce * sample_weight
-    cls_loss = ce.mean()
-
-    vad_se = ((vad_pred - vad_target) ** 2).mean(dim=-1) * vad_mask
-    denom_v = vad_mask.sum().clamp(min=1e-6)
-    vad_loss = vad_se.sum() / denom_v
-
-    int_se = ((intensity_pred.squeeze(-1) - intensity_target) ** 2) * intensity_mask
-    denom_i = intensity_mask.sum().clamp(min=1e-6)
-    int_loss = int_se.sum() / denom_i
-
-    total = cls_loss + W_VAD * vad_loss + W_INTENSITY * int_loss
-
-    kd_loss: torch.Tensor | None = None
-    if teacher_logits is not None and kd_mask is not None and kd_mask.any():
-        T = kd_temperature
-        student_log = F.log_softmax(logits / T, dim=-1)
-        teacher_prob = F.softmax(teacher_logits / T, dim=-1)
-        per_sample = F.kl_div(student_log, teacher_prob, reduction="none").sum(dim=-1) * (T * T)
-        kd_loss = (per_sample * kd_mask).sum() / kd_mask.sum().clamp(min=1e-6)
-        # 蒸馏样本上把 CE 与 KD 混合；无 teacher 的样本不受影响
-        total = total + kd_alpha * kd_loss
-
-    return LossParts(
-        total=total,
-        cls=cls_loss.detach(),
-        vad=vad_loss.detach(),
-        intensity=int_loss.detach(),
-        kd=None if kd_loss is None else kd_loss.detach(),
+    """回归损失。每个目标有自己的权重 —— intimacy_bid 最高，因为它是
+    失配机制的输入，错了会直接把「亲近」判成「越界」。"""
+    weights = torch.tensor(
+        [TARGET_WEIGHTS[t] for t in REGRESSION_TARGETS], device=pred.device, dtype=pred.dtype
     )
+    # Huber：标注里总有几条离谱的，L2 会被它们带偏
+    err = torch.nn.functional.smooth_l1_loss(pred, target, reduction="none", beta=0.2)
+    err = err * weights
+    if target_mask is not None:
+        err = err * target_mask
+    per_sample = err.mean(dim=-1)
+    if sample_weight is not None:
+        per_sample = per_sample * sample_weight
+    move = per_sample.mean()
+
+    directed = torch.nn.functional.binary_cross_entropy_with_logits(
+        directed_logit.squeeze(-1), directed_target
+    )
+
+    total = move + DIRECTED_WEIGHT * directed
+
+    kd = None
+    if teacher is not None and kd_mask is not None and kd_mask.any():
+        per = (torch.nn.functional.smooth_l1_loss(pred, teacher, reduction="none", beta=0.2)
+               * weights).mean(dim=-1)
+        kd = (per * kd_mask).sum() / kd_mask.sum().clamp(min=1e-6)
+        total = total + kd_alpha * kd
+
+    return LossParts(total=total, move=move.detach(), directed=directed.detach(),
+                     kd=None if kd is None else kd.detach())
 
 
 def compute_class_weights(

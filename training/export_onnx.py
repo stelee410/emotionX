@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
+from affect.targets import REGRESSION_TARGETS  # noqa: E402
 from affect.text_format import MAX_LENGTH, build_l1_input  # noqa: E402
 from affect.tokenization import WordPieceTokenizer  # noqa: E402
 from training.model import AffectEncoder, load_tokenizer, write_vocab_file  # noqa: E402
@@ -54,8 +55,8 @@ def export(
     out.mkdir(parents=True, exist_ok=True)
 
     model = AffectEncoder.load(model_dir, map_location="cpu").eval()
-    if not model.strategy_labels:
-        raise SystemExit(f"{model_dir} 里的模型没有 strategy 头 —— 先跑 stage2_finetune.py")
+    if not model.has_move_head:
+        raise SystemExit(f"{model_dir} 里的模型没有 move 头 —— 先跑 stage2_finetune.py")
 
     # vocab.txt：优先复用训练时导出的那份（保证 id 完全一致）
     src_vocab = model_dir / "vocab.txt"
@@ -71,14 +72,13 @@ def export(
         (dummy, torch.ones_like(dummy), torch.zeros_like(dummy)),
         str(onnx_path),
         input_names=["input_ids", "attention_mask", "token_type_ids"],
-        output_names=["strategy_logits", "vad", "intensity"],
+        output_names=["move", "directed"],
         dynamic_axes={
             "input_ids": {0: "batch", 1: "seq"},
             "attention_mask": {0: "batch", 1: "seq"},
             "token_type_ids": {0: "batch", 1: "seq"},
-            "strategy_logits": {0: "batch"},
-            "vad": {0: "batch"},
-            "intensity": {0: "batch"},
+            "move": {0: "batch"},
+            "directed": {0: "batch"},
         },
         opset_version=opset,
         do_constant_folding=True,
@@ -86,7 +86,7 @@ def export(
     )
     result: dict[str, Any] = {
         "fp32_mb": round(onnx_path.stat().st_size / 1e6, 2),
-        "labels": model.strategy_labels,
+        "targets": list(REGRESSION_TARGETS),
     }
 
     if quantize:
@@ -101,12 +101,12 @@ def export(
         result["int8_mb"] = round(int8_path.stat().st_size / 1e6, 2)
 
     meta = {
-        "strategy_labels": model.strategy_labels,
+        "targets": list(REGRESSION_TARGETS),
         "max_length": max_length,
         "base_model": model.base_model,
         "hidden_size": model.config.hidden_size,
         "input_format": "[USER] {utterance} [SEP] [AGENT] {last_agent_reply}",
-        "outputs": ["strategy_logits", "vad(valence,arousal)", "intensity"],
+        "outputs": ["move(5)", "directed(1)"],
         "exported_from": str(model_dir),
         "note": "int8 量化与延迟基准必须在目标 Linux 服务器上重做（spec §3.5）",
     }
@@ -128,7 +128,7 @@ def verify(out_dir: str | Path, model_dir: str | Path, tolerance: float = 2e-3) 
     enc = tok_py.encode_batch(texts, max_length=max_length)
 
     with torch.no_grad():
-        t_logits, t_vad, t_int = torch_model(
+        t_move, t_dir = torch_model(
             torch.tensor(enc["input_ids"]),
             torch.tensor(enc["attention_mask"]),
             torch.tensor(enc["token_type_ids"]),
@@ -143,19 +143,15 @@ def verify(out_dir: str | Path, model_dir: str | Path, tolerance: float = 2e-3) 
             continue
         sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
         feed = {k: np.asarray(v, dtype=np.int64) for k, v in enc.items()}
-        o_logits, o_vad, o_int = sess.run(None, feed)
-        max_diff = float(np.abs(o_logits - t_logits.numpy()).max())
-        agree = int((o_logits.argmax(-1) == t_logits.numpy().argmax(-1)).sum())
+        o_move, o_dir = sess.run(None, feed)
+        max_diff = float(np.abs(o_move - t_move.numpy()).max())
+        sign_agree = int(((o_dir >= 0) == (t_dir.numpy() >= 0)).sum())
         report[name] = {
-            "max_logit_diff": round(max_diff, 5),
-            "argmax_agreement": f"{agree}/{len(texts)}",
-            "vad_max_diff": round(float(np.abs(o_vad - t_vad.numpy()).max()), 5),
-            "intensity_max_diff": round(float(np.abs(o_int - t_int.numpy()).max()), 5),
+            "max_move_diff": round(max_diff, 5),
+            "directed_agreement": f"{sign_agree}/{len(texts)}",
         }
         if name == "model.onnx" and max_diff > tolerance:
             raise SystemExit(f"fp32 ONNX 与 torch 输出不一致：max_diff={max_diff}")
-        if name == "model.onnx" and agree != len(texts):
-            raise SystemExit("fp32 ONNX 的 argmax 与 torch 不一致")
     return report
 
 

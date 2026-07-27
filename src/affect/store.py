@@ -13,15 +13,15 @@ import time
 from pathlib import Path
 from typing import Any, Protocol
 
-from .types import AgentAffect, TurnTrace
+from .channels import AffectState
 
 DEFAULT_TTL_SECONDS = 24 * 3600
 KEY_PREFIX = "affect:state:"
 
 
 class StateStore(Protocol):
-    def get(self, session_id: str) -> AgentAffect | None: ...
-    def set(self, session_id: str, state: AgentAffect) -> None: ...
+    def get(self, session_id: str) -> AffectState | None: ...
+    def set(self, session_id: str, state: AffectState) -> None: ...
     def delete(self, session_id: str) -> None: ...
 
 
@@ -33,7 +33,7 @@ class InMemoryStateStore:
         self._data: dict[str, tuple[float, dict[str, Any]]] = {}
         self._lock = threading.Lock()
 
-    def get(self, session_id: str) -> AgentAffect | None:
+    def get(self, session_id: str) -> AffectState | None:
         with self._lock:
             item = self._data.get(session_id)
             if item is None:
@@ -42,9 +42,9 @@ class InMemoryStateStore:
             if time.time() - written_at > self.ttl:
                 del self._data[session_id]
                 return None
-            return AgentAffect.from_dict(payload)
+            return AffectState.from_dict(payload)
 
-    def set(self, session_id: str, state: AgentAffect) -> None:
+    def set(self, session_id: str, state: AffectState) -> None:
         with self._lock:
             self._data[session_id] = (time.time(), state.to_dict())
 
@@ -58,7 +58,7 @@ class InMemoryStateStore:
 
 
 class RedisStateStore:
-    """Redis backend。序列化为 JSON，字段即 AgentAffect。"""
+    """Redis backend。序列化为 JSON，字段即 AffectState。"""
 
     def __init__(
         self,
@@ -81,18 +81,18 @@ class RedisStateStore:
     def _key(session_id: str) -> str:
         return f"{KEY_PREFIX}{session_id}"
 
-    def get(self, session_id: str) -> AgentAffect | None:
+    def get(self, session_id: str) -> AffectState | None:
         raw = self._r.get(self._key(session_id))
         if not raw:
             return None
         try:
-            return AgentAffect.from_dict(json.loads(raw))
+            return AffectState.from_dict(json.loads(raw))
         except (ValueError, KeyError, TypeError):
             # 脏数据不应打断服务：当作冷启动
             self._r.delete(self._key(session_id))
             return None
 
-    def set(self, session_id: str, state: AgentAffect) -> None:
+    def set(self, session_id: str, state: AffectState) -> None:
         self._r.setex(self._key(session_id), self.ttl, json.dumps(state.to_dict()))
 
     def delete(self, session_id: str) -> None:
@@ -120,10 +120,10 @@ class TraceLogger:
         if self.enabled:
             self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def log(self, trace: TurnTrace) -> None:
+    def log_dict(self, record: dict[str, Any]) -> None:
         if not self.enabled:
             return
-        line = json.dumps(trace.to_dict(), ensure_ascii=False)
+        line = json.dumps(record, ensure_ascii=False, default=str)
         with self._lock, self.path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
 

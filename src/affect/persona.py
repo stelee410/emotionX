@@ -1,4 +1,17 @@
-"""§4.3 人格配置：YAML 加载与 schema 校验。"""
+"""人格 —— 与关系正交的那一半。
+
+两个概念必须分开，它们的更新频率差两三个数量级，测试方式也完全不同：
+
+    关系 RelationalFrame   我们是什么关系      → 评价的**参照系**（每会话）
+    人格 Persona           我是个什么样的存在  → 状态机的**参数**（极少变）
+
+同一个「沉稳型 agent」可以处在不同关系里；同一段关系也可以配不同人格。
+捏在一个字符串里的后果是无法独立调参，也无法定位问题 ——
+「她今天怎么这么冷淡」到底是关系设定、人格参数，还是目标冲突？
+
+人格只调**三样东西**：静息偏移、通道增益、时间常数。它不能改变评价的方向
+（那是关系的职责），也不能放松安全约束（那是安全域的职责）。
+"""
 
 from __future__ import annotations
 
@@ -7,123 +20,153 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .safety import CrisisSensitivity
-from .types import AFFECT_DIMS, AgentAffect
+from .channels import CHANNEL_NAMES, CHANNELS, clamp
 
-# 仓库根目录下的 config/
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 PERSONA_DIR = CONFIG_DIR / "personas"
 
-# §9.5 安全下限：不论 persona 怎么配，valence 下界不得低于此值 —— agent 不得
-# 因为"情绪太差"而消极应答。
-HARD_VALENCE_FLOOR = -0.6
 
-
-class Baseline(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    valence: float = Field(ge=-1.0, le=1.0)
-    arousal: float = Field(ge=0.0, le=1.0)
-    dominance: float = Field(ge=0.0, le=1.0)
-    concern: float = Field(ge=0.0, le=1.0)
-
-    def as_dict(self) -> dict[str, float]:
-        return {d: float(getattr(self, d)) for d in AFFECT_DIMS}
+def _check_channels(d: dict[str, float], field: str) -> dict[str, float]:
+    unknown = set(d) - set(CHANNEL_NAMES)
+    if unknown:
+        raise ValueError(f"{field} 含未知通道 {sorted(unknown)}，可用 {CHANNEL_NAMES}")
+    return {k: float(v) for k, v in d.items()}
 
 
 class Persona(BaseModel):
-    """人格配置。所有字段都会被 schema 校验，非法 YAML 直接启动失败。"""
-
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     description: str = ""
-    baseline: Baseline
-    decay: float = Field(ge=0.0, le=1.0)
-    sensitivity: float = Field(gt=0.0, le=3.0)
-    idle_reset_seconds: float = Field(default=1800.0, gt=0.0)
-    bounds: dict[str, tuple[float, float]] = Field(default_factory=dict)
-    system_persona: str = ""
-    medical_bypass: bool = False
-    allow_emoji: bool = False
-    # §9.6：persona 只能收紧危机检测（balanced → high），不能关闭。
-    # TIER-1 的明确自伤表述在任何取值下都会触发，见 safety.detect_crisis。
-    crisis_sensitivity: CrisisSensitivity = "balanced"
 
-    @field_validator("bounds")
+    # 加到「关系派生 baseline」之上的人格偏移。天性乐观的人 valence 静息更高。
+    baseline_offsets: dict[str, float] = Field(default_factory=dict)
+    # 乘到通道增益上。反应大的人 gain_scale 大。
+    gain_scale: dict[str, float] = Field(default_factory=dict)
+    # 乘到半衰期上。>1 = 情绪更持久（记仇 / 有余韵）。
+    half_life_scale: dict[str, float] = Field(default_factory=dict)
+    # 全局增益，乘在所有通道上
+    sensitivity: float = Field(default=1.0, gt=0.0, le=2.5)
+
+    # 静态人设文本，拼进 L3 prompt 最前部
+    style: str = ""
+    allow_emoji: bool = False
+    # 说话的详略：影响 max_sentences 的基线
+    verbosity: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    @field_validator("baseline_offsets")
     @classmethod
-    def _check_bounds(
-        cls, v: dict[str, tuple[float, float]]
-    ) -> dict[str, tuple[float, float]]:
-        for dim, (lo, hi) in v.items():
-            if dim not in AFFECT_DIMS:
-                raise ValueError(f"bounds 含未知维度 {dim!r}，允许：{AFFECT_DIMS}")
-            if lo >= hi:
-                raise ValueError(f"bounds[{dim}] 下界必须小于上界，得到 {lo} >= {hi}")
+    def _v_offsets(cls, v: dict[str, float]) -> dict[str, float]:
+        v = _check_channels(v, "baseline_offsets")
+        for k, x in v.items():
+            if abs(x) > 0.4:
+                raise ValueError(
+                    f"baseline_offsets[{k}]={x} 过大：人格偏移不该盖过关系的作用"
+                )
         return v
 
-    @model_validator(mode="after")
-    def _baseline_within_bounds(self) -> Persona:
-        """baseline 必须落在 bounds 内，否则衰减目标本身不可达。"""
-        base = self.baseline.as_dict()
-        for dim, (lo, hi) in self.bounds.items():
-            if not (lo <= base[dim] <= hi):
-                raise ValueError(
-                    f"persona {self.name!r}: baseline.{dim}={base[dim]} 落在 bounds[{dim}]=[{lo},{hi}] 之外"
-                )
-        return self
+    @field_validator("gain_scale", "half_life_scale")
+    @classmethod
+    def _v_scales(cls, v: dict[str, float]) -> dict[str, float]:
+        v = _check_channels(v, "scale")
+        for k, x in v.items():
+            if not (0.2 <= x <= 3.0):
+                raise ValueError(f"scale[{k}]={x} 超出 [0.2, 3.0]")
+        return v
 
-    # ---- 硬约束合成 ----
-    def effective_bounds(self) -> dict[str, tuple[float, float]]:
-        """persona bounds 与全局硬约束的交集。persona 无法放宽硬约束。"""
-        merged: dict[str, tuple[float, float]] = {
-            "valence": (-1.0, 1.0),
-            "arousal": (0.0, 1.0),
-            "dominance": (0.0, 1.0),
-            "concern": (0.0, 1.0),
+    # ---- 派生 ----
+    def baselines(self, relation_baselines: dict[str, float]) -> dict[str, float]:
+        """关系派生的静息值 + 人格偏移，再钳到通道值域内。"""
+        out: dict[str, float] = {}
+        for name in CHANNEL_NAMES:
+            spec = CHANNELS[name]
+            base = relation_baselines.get(name, spec.baseline)
+            out[name] = clamp(base + self.baseline_offsets.get(name, 0.0), spec.lo, spec.hi)
+        return out
+
+    def gains(self) -> dict[str, float]:
+        return {
+            n: CHANNELS[n].gain * self.gain_scale.get(n, 1.0) * self.sensitivity
+            for n in CHANNEL_NAMES
         }
-        for dim, (lo, hi) in self.bounds.items():
-            glo, ghi = merged[dim]
-            merged[dim] = (max(lo, glo), min(hi, ghi))
-        # §9.5：valence 下界永远不低于 HARD_VALENCE_FLOOR
-        vlo, vhi = merged["valence"]
-        merged["valence"] = (max(vlo, HARD_VALENCE_FLOOR), vhi)
-        return merged
 
-    def baseline_state(self) -> AgentAffect:
-        """冷启动状态 = persona baseline。"""
-        b = self.baseline
-        return AgentAffect(
-            valence=b.valence, arousal=b.arousal, dominance=b.dominance, concern=b.concern
-        )
+    def half_lives(self) -> dict[str, float]:
+        return {n: CHANNELS[n].half_life * self.half_life_scale.get(n, 1.0) for n in CHANNEL_NAMES}
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
 
 
-def load_persona_file(path: str | Path) -> Persona:
-    """从任意 YAML 路径加载 persona（§4.3 要求的开放接口）。"""
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"persona 文件不存在: {p}")
-    data: dict[str, Any] = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-    return Persona.model_validate(data)
+# ---------------------------------------------------------------------------
+# 内置人格。数值是设计输入，调完请跑反事实套件确认方向没变。
+# ---------------------------------------------------------------------------
+BUILTIN: dict[str, dict[str, Any]] = {
+    "steady": {
+        "description": "沉稳克制 — 反应幅度小、恢复快、语气确定",
+        "baseline_offsets": {"dominance": 0.10, "arousal": -0.05},
+        "gain_scale": {"arousal": 0.7, "threat": 0.8, "valence": 0.8},
+        "half_life_scale": {"threat": 0.7, "valence": 0.7},
+        "sensitivity": 0.75,
+        "style": "你说话克制、准确，不夸张，不绕弯子。",
+        "verbosity": 0.4,
+    },
+    "warm": {
+        "description": "外放共情 — 情绪起伏明显、亲近来得快也留得久",
+        "baseline_offsets": {"valence": 0.10, "concern": 0.10, "affiliation": 0.05},
+        "gain_scale": {"concern": 1.3, "affiliation": 1.25, "valence": 1.2},
+        "half_life_scale": {"affiliation": 1.3, "valence": 1.2},
+        "sensitivity": 1.1,
+        "style": "你说话自然亲近，愿意接住对方的情绪，但不腻、不越界。",
+        "verbosity": 0.6,
+    },
+    "playful": {
+        "description": "俏皮活泼 — 唤起高、恢复快、不容易记仇",
+        "baseline_offsets": {"arousal": 0.10, "valence": 0.12},
+        "gain_scale": {"arousal": 1.3, "threat": 0.9},
+        "half_life_scale": {"threat": 0.6, "arousal": 0.8},
+        "sensitivity": 1.15,
+        "style": "你说话轻快、有点跳脱，喜欢用具体的小细节而不是大词。",
+        "verbosity": 0.5,
+    },
+    "reserved": {
+        "description": "疏离谨慎 — 亲近建立得慢，戒备消退得慢",
+        "baseline_offsets": {"affiliation": -0.08, "dominance": -0.05},
+        "gain_scale": {"affiliation": 0.7, "threat": 1.2},
+        "half_life_scale": {"affiliation": 1.4, "threat": 1.5},
+        "sensitivity": 0.9,
+        "style": "你说话简短、留有余地，不轻易表露态度。",
+        "verbosity": 0.35,
+    },
+}
+
+
+def builtin(name: str) -> Persona:
+    if name not in BUILTIN:
+        raise KeyError(f"未知内置人格 {name!r}，可用：{sorted(BUILTIN)}")
+    return Persona.model_validate({"name": name, **BUILTIN[name]})
+
+
+def load_persona(name_or_path: str, persona_dir: str | Path | None = None) -> Persona:
+    """先找 YAML 文件，再找内置人格。"""
+    p = Path(name_or_path)
+    if p.suffix in {".yaml", ".yml"} and p.exists():
+        return Persona.model_validate(yaml.safe_load(p.read_text(encoding="utf-8")) or {})
+    base = Path(persona_dir) if persona_dir else PERSONA_DIR
+    for suffix in (".yaml", ".yml"):
+        f = base / f"{name_or_path}{suffix}"
+        if f.exists():
+            return Persona.model_validate(yaml.safe_load(f.read_text(encoding="utf-8")) or {})
+    return builtin(name_or_path)
 
 
 @lru_cache(maxsize=32)
-def load_persona(name_or_path: str, persona_dir: str | None = None) -> Persona:
-    """按名字从 config/personas/ 加载，或直接给出 YAML 路径。"""
-    candidate = Path(name_or_path)
-    if candidate.suffix in {".yaml", ".yml"} and candidate.exists():
-        return load_persona_file(candidate)
-    base = Path(persona_dir) if persona_dir else PERSONA_DIR
-    for suffix in (".yaml", ".yml"):
-        p = base / f"{name_or_path}{suffix}"
-        if p.exists():
-            return load_persona_file(p)
-    available = sorted(x.stem for x in base.glob("*.y*ml"))
-    raise FileNotFoundError(f"未找到 persona {name_or_path!r}；可用：{available}")
+def get_persona(name: str) -> Persona:
+    return load_persona(name)
 
 
-def list_personas(persona_dir: str | None = None) -> list[str]:
+def list_personas(persona_dir: str | Path | None = None) -> list[str]:
     base = Path(persona_dir) if persona_dir else PERSONA_DIR
-    return sorted(x.stem for x in base.glob("*.y*ml"))
+    from_files = {f.stem for f in base.glob("*.y*ml")} if base.exists() else set()
+    return sorted(from_files | set(BUILTIN))

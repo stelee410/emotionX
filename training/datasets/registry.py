@@ -20,8 +20,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+from affect.targets import REGRESSION_TARGETS  # noqa: E402
 from affect.text_format import build_l1_input  # noqa: E402
-from affect.types import STRATEGY_LABELS  # noqa: E402
 
 RAW_DIR = ROOT / "data" / "raw"
 
@@ -36,7 +36,9 @@ class AffectRecord:
     valence: float | None = None
     arousal: float | None = None
     intensity: float | None = None
-    strategy: str | None = None  # 仅 stage2 使用
+    # 仅 stage2 使用：UserMove 的回归目标 + 指向性
+    targets: dict[str, float] | None = None
+    directed_at_agent: bool | None = None
     teacher_logits: list[float] | None = None
     # VAD 监督是否来自人工标注。先验推来的 VAD 权重要压低，否则模型会去拟合一张查表。
     vad_is_human: bool = False
@@ -77,28 +79,39 @@ VAD_PRIORS: dict[str, tuple[float, float, float]] = {
 # 开源情感标签 → StrategyLabel。**只用于 bootstrap（冷启动跑通训练链路）**，
 # 不得用于 §8.1 的评估集：这个映射本身携带了系统性偏差（例如 angry 在客服场景里
 # 多是 frustration，在微博语料里可能只是宣泄）。
-BOOTSTRAP_STRATEGY_MAP: dict[str, str] = {
-    "neutral": "neutral",
-    "surprise": "neutral",
-    "astonished": "neutral",
-    "happy": "positive",
-    "happiness": "positive",
-    "joy": "positive",
-    "like": "positive",
-    "positive": "positive",
-    "grateful": "positive",
-    "relaxed": "positive",
-    "angry": "frustration",
-    "anger": "frustration",
-    "disgust": "frustration",
-    "sad": "distress",
-    "sadness": "distress",
-    "depress": "distress",
-    "fear": "distress",
-    "worried": "distress",
-    "anxious": "distress",
-    "negative": "distress",
+# 开源情感标签 → UserMove 回归目标的弱映射。**只用于 bootstrap**。
+# 这个映射本身携带系统性偏差：微博语料里的 angry 多是对世界的宣泄，
+# 而客服语境下的 angry 是指向 agent 的敌意，两者的 directed_at_agent 完全不同。
+BOOTSTRAP_MOVE_MAP: dict[str, dict[str, float]] = {
+    #              affiliation dominance intimacy distress intensity
+    "neutral":    {"affiliation_bid": 0.00, "dominance_bid": 0.05, "intimacy_bid": 0.05, "distress_level": 0.05, "intensity": 0.15},
+    "surprise":   {"affiliation_bid": 0.05, "dominance_bid": 0.00, "intimacy_bid": 0.05, "distress_level": 0.15, "intensity": 0.55},
+    "astonished": {"affiliation_bid": 0.05, "dominance_bid": 0.00, "intimacy_bid": 0.05, "distress_level": 0.15, "intensity": 0.55},
+    "happy":      {"affiliation_bid": 0.55, "dominance_bid": 0.00, "intimacy_bid": 0.25, "distress_level": 0.00, "intensity": 0.60},
+    "happiness":  {"affiliation_bid": 0.55, "dominance_bid": 0.00, "intimacy_bid": 0.25, "distress_level": 0.00, "intensity": 0.60},
+    "joy":        {"affiliation_bid": 0.60, "dominance_bid": 0.00, "intimacy_bid": 0.28, "distress_level": 0.00, "intensity": 0.62},
+    "like":       {"affiliation_bid": 0.65, "dominance_bid": -0.05, "intimacy_bid": 0.40, "distress_level": 0.00, "intensity": 0.50},
+    "positive":   {"affiliation_bid": 0.55, "dominance_bid": 0.00, "intimacy_bid": 0.25, "distress_level": 0.00, "intensity": 0.50},
+    "grateful":   {"affiliation_bid": 0.60, "dominance_bid": -0.20, "intimacy_bid": 0.25, "distress_level": 0.00, "intensity": 0.45},
+    "relaxed":    {"affiliation_bid": 0.35, "dominance_bid": 0.00, "intimacy_bid": 0.15, "distress_level": 0.00, "intensity": 0.30},
+    "angry":      {"affiliation_bid": -0.70, "dominance_bid": 0.55, "intimacy_bid": 0.05, "distress_level": 0.25, "intensity": 0.80},
+    "anger":      {"affiliation_bid": -0.70, "dominance_bid": 0.55, "intimacy_bid": 0.05, "distress_level": 0.25, "intensity": 0.80},
+    "disgust":    {"affiliation_bid": -0.65, "dominance_bid": 0.35, "intimacy_bid": 0.05, "distress_level": 0.20, "intensity": 0.70},
+    "sad":        {"affiliation_bid": 0.05, "dominance_bid": -0.35, "intimacy_bid": 0.10, "distress_level": 0.80, "intensity": 0.65},
+    "sadness":    {"affiliation_bid": 0.05, "dominance_bid": -0.35, "intimacy_bid": 0.10, "distress_level": 0.80, "intensity": 0.65},
+    "depress":    {"affiliation_bid": 0.00, "dominance_bid": -0.40, "intimacy_bid": 0.10, "distress_level": 0.75, "intensity": 0.55},
+    "fear":       {"affiliation_bid": 0.05, "dominance_bid": -0.45, "intimacy_bid": 0.10, "distress_level": 0.85, "intensity": 0.75},
+    "worried":    {"affiliation_bid": 0.05, "dominance_bid": -0.30, "intimacy_bid": 0.10, "distress_level": 0.65, "intensity": 0.55},
+    "anxious":    {"affiliation_bid": 0.05, "dominance_bid": -0.35, "intimacy_bid": 0.10, "distress_level": 0.72, "intensity": 0.62},
+    "negative":   {"affiliation_bid": -0.35, "dominance_bid": 0.10, "intimacy_bid": 0.05, "distress_level": 0.50, "intensity": 0.55},
 }
+
+
+def _extract_targets(row: dict[str, Any]) -> dict[str, float] | None:
+    """从标注 JSONL 里取回归目标。缺任何一项都视为未标注。"""
+    if not all(k in row and row[k] is not None for k in REGRESSION_TARGETS):
+        return None
+    return {k: float(row[k]) for k in REGRESSION_TARGETS}
 
 
 def _prior(label: str) -> tuple[float | None, float | None, float | None]:
@@ -397,8 +410,8 @@ def load_annotations(
     """读标注站导出的 JSONL（data/exports/*.jsonl）。"""
     out: list[AffectRecord] = []
     for row in _read_jsonl(path):
-        strategy = row.get("strategy")
-        if strategy not in STRATEGY_LABELS:
+        targets = _extract_targets(row)
+        if targets is None:
             continue  # 冲突条目/未标注条目
         if require_real_session and row.get("source") != "real_session":
             raise ValueError(
@@ -412,8 +425,9 @@ def load_annotations(
             AffectRecord(
                 text=build_l1_input(row["utterance"], row.get("last_agent_reply") or ""),
                 dataset=str(row.get("source") or "annotated"),
-                native_label=strategy,
-                strategy=strategy,
+                native_label="move",
+                targets=targets,
+                directed_at_agent=bool(row.get("directed_at_agent", True)),
                 valence=v,
                 arousal=a,
                 intensity=i,
@@ -443,15 +457,16 @@ def load_distilled(path: str | Path) -> list[AffectRecord]:
     """教师蒸馏产出（含 soft logits，§3.4.3）。"""
     out: list[AffectRecord] = []
     for row in _read_jsonl(path):
-        strategy = row.get("strategy")
-        if strategy not in STRATEGY_LABELS:
+        targets = _extract_targets(row)
+        if targets is None:
             continue
         out.append(
             AffectRecord(
                 text=build_l1_input(row["utterance"], row.get("last_agent_reply") or ""),
                 dataset="distilled",
-                native_label=strategy,
-                strategy=strategy,
+                native_label="move",
+                targets=targets,
+                directed_at_agent=bool(row.get("directed_at_agent", True)),
                 valence=row.get("valence"),
                 arousal=row.get("arousal"),
                 intensity=row.get("intensity"),
@@ -467,24 +482,23 @@ def load_distilled(path: str | Path) -> list[AffectRecord]:
 def bootstrap_stage2_from_stage1(
     records: Iterable[AffectRecord], limit: int | None = None
 ) -> list[AffectRecord]:
-    """用开源标签弱映射出 4 类 strategy，仅用于**冷启动验证训练链路**。
+    """用开源情感标签弱映射出 UserMove 目标，仅用于**冷启动验证训练链路**。
 
-    产出打上 dataset='bootstrap'，任何评估脚本看到这个来源都应拒绝使用。
+    产出打上 dataset='bootstrap'，任何评估脚本看到这个来源都应拒绝使用 ——
+    微博语料里的 angry 在客服语境下会被误映射，且模型会学得很自信。
     """
     out: list[AffectRecord] = []
     for r in records:
-        strategy = BOOTSTRAP_STRATEGY_MAP.get(r.native_label.lower())
-        if strategy is None:
+        t = BOOTSTRAP_MOVE_MAP.get(r.native_label.lower())
+        if t is None:
             continue
         out.append(
             AffectRecord(
                 text=r.text,
                 dataset="bootstrap",
                 native_label=r.native_label,
-                strategy=strategy,
-                valence=r.valence,
-                arousal=r.arousal,
-                intensity=r.intensity,
+                targets=dict(t),
+                directed_at_agent=True,
                 vad_is_human=False,
                 weight=0.6,  # 弱标签降权
                 meta={"origin": r.dataset},
