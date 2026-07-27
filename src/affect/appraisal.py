@@ -118,6 +118,9 @@ class SessionAffect:
     state: AffectState
     habituation: dict[str, float] = field(default_factory=dict)
     turn: int = 0
+    # 用户表达过的最高亲密度。安全约束「永远跟随、不得引领」的依据 ——
+    # agent 可表达的亲密度不得超过这个峰值（domains.intimacy_follow_cap）。
+    peak_user_intimacy: float = 0.0
 
     @classmethod
     def cold_start(
@@ -136,6 +139,7 @@ class SessionAffect:
             "state": self.state.to_dict(),
             "habituation": dict(self.habituation),
             "turn": self.turn,
+            "peak_user_intimacy": self.peak_user_intimacy,
         }
 
     @classmethod
@@ -144,6 +148,7 @@ class SessionAffect:
             state=AffectState.from_dict(data["state"]),
             habituation=dict(data.get("habituation") or {}),
             turn=int(data.get("turn", 0)),
+            peak_user_intimacy=float(data.get("peak_user_intimacy", 0.0)),
         )
 
 
@@ -378,7 +383,21 @@ class RelationalAppraisal:
             ceiling_clamped=ceiling_clamped,
             repair_applied=bool(ctx.user_repaired),
         )
-        return SessionAffect(state=state, habituation=hab, turn=session.turn + 1), trace
+        return (
+            SessionAffect(
+                state=state,
+                habituation=hab,
+                turn=session.turn + 1,
+                # 只记录**指向 agent 本人**的亲密表达。用户描述别处的亲密关系
+                # （「我和我对象……」）不该抬高 agent 可表达的亲密度上限。
+                peak_user_intimacy=(
+                    max(session.peak_user_intimacy, move.intimacy_bid)
+                    if move.directed_at_agent
+                    else session.peak_user_intimacy
+                ),
+            ),
+            trace,
+        )
 
     # ------------------------------------------------------- 可执行的不变量
     def assert_no_contagion(self) -> None:
