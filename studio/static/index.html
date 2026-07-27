@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>emotionX Studio</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a; --line2:#353b48;
+  --fg:#e6e9ef; --dim:#8f97a8; --accent:#6ea8fe; --ok:#56d364; --warn:#e3b341; --bad:#e5534b;
+  --valence:#8b5cf6; --arousal:#f0883e; --dominance:#38bdf8; --concern:#facc15;
+  --affiliation:#56d364; --threat:#e5534b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.6 -apple-system,"PingFang SC","Helvetica Neue",sans-serif}
+header{display:flex;align-items:center;gap:6px;padding:0 16px;background:var(--panel);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;height:46px}
+header h1{font-size:14px;margin:0 18px 0 0;font-weight:600;letter-spacing:.04em}
+nav button{background:none;border:none;border-bottom:2px solid transparent;color:var(--dim);
+  padding:13px 14px;font-size:13.5px;cursor:pointer}
+nav button.on{color:var(--fg);border-bottom-color:var(--accent)}
+nav button:hover{color:var(--fg)}
+.spacer{flex:1}
+.pill{font-size:11.5px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);
+  border-radius:20px;padding:3px 10px}
+main{padding:18px;max-width:1500px;margin:0 auto}
+.view{display:none}.view.on{display:block}
+.grid{display:grid;gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h3{margin:0 0 10px;font-size:11.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim)}
+label{font-size:12.5px;color:var(--dim);display:block;margin-bottom:4px}
+select,input[type=text],input[type=number],textarea{background:var(--panel2);color:var(--fg);
+  border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:inherit;font-size:13px;width:100%}
+textarea{resize:vertical;font-family:ui-monospace,monospace;font-size:12px}
+button.btn{background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:7px;
+  padding:7px 14px;font-size:13px;cursor:pointer}
+button.btn:hover:not(:disabled){border-color:var(--accent)}
+button.btn.primary{background:#2d5bb9;border-color:#3a6ed0;font-weight:600}
+button.btn:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.mono{font-family:ui-monospace,monospace;font-size:12px}
+.dim{color:var(--dim)}
+kbd{font:11px ui-monospace,monospace;background:#0b0d11;border:1px solid var(--line);
+  border-radius:4px;padding:1px 5px;color:var(--dim)}
+
+/* 通道条 */
+.chan{display:grid;grid-template-columns:82px 1fr 52px;gap:9px;align-items:center;margin:5px 0}
+.chan .name{font-size:12px;color:var(--dim)}
+.track{position:relative;height:7px;background:var(--panel2);border-radius:4px;overflow:hidden}
+.track .fill{position:absolute;top:0;bottom:0;border-radius:4px;transition:all .3s}
+.track .base{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--line2)}
+.chan .val{font-variant-numeric:tabular-nums;text-align:right;font-size:12px}
+.bk{font-size:10px;padding:0 5px;border-radius:3px;margin-left:5px}
+.bk.high{background:#4b2320;color:#ffb3ae}.bk.medium{background:#3a3320;color:#e3b341}
+.bk.low{background:#1e2a20;color:#7ee08a}
+
+/* 对话 */
+.chat{height:330px;overflow-y:auto;padding:4px}
+.msg{margin:8px 0;padding:8px 11px;border-radius:9px;max-width:82%;font-size:13.5px}
+.msg.user{background:#243044;margin-left:auto}
+.msg.sys{background:var(--panel2);color:var(--dim);font-size:12px;max-width:100%;
+  font-family:ui-monospace,monospace}
+.tag{display:inline-block;font-size:11px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:5px;padding:1px 7px;margin:2px 4px 2px 0}
+.tag.act{border-color:#3a6ed0;color:#9fc4ff}
+.tag.sup{opacity:.45;text-decoration:line-through}
+.tag.crisis{border-color:var(--bad);color:#ffb3ae}
+pre{background:#0b0d11;border:1px solid var(--line);border-radius:7px;padding:11px;
+  overflow:auto;font-size:11.5px;max-height:340px;white-space:pre-wrap}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--dim);font-weight:500;font-size:11.5px}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.spark{height:110px;width:100%}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel2);
+  border:1px solid var(--line);border-radius:8px;padding:9px 18px;font-size:13px;opacity:0;
+  transition:opacity .2s;pointer-events:none;z-index:99}
+.toast.show{opacity:1}.toast.err{border-color:var(--bad);color:#ffb3ae}
+.cmp{display:grid;grid-template-columns:1fr 90px 1fr;gap:12px;align-items:stretch;margin:14px 0}
+.cmp .side{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:18px;
+  cursor:pointer;font-size:16px;line-height:1.6;display:flex;align-items:center;
+  justify-content:center;text-align:center;min-height:130px}
+.cmp .side:hover{border-color:var(--accent)}
+.cmp .mid{display:flex;flex-direction:column;justify-content:center;gap:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>emotionX Studio</h1>
+  <nav>
+    <button data-v="test" class="on">对话测试台</button>
+    <button data-v="params">参数调校</button>
+    <button data-v="cf">反事实</button>
+    <button data-v="anno">标注</button>
+    <button data-v="train">训练</button>
+  </nav>
+  <span class="spacer"></span>
+  <span class="pill" id="cfPill">反事实 —</span>
+  <span class="pill" id="statPill">—</span>
+</header>
+
+<main>
+<!-- ═══════════════════════════ 对话测试台 ═══════════════════════════ -->
+<section class="view on" id="v-test">
+  <div class="grid" style="grid-template-columns:300px 1fr 340px">
+    <div>
+      <div class="card">
+        <h3>会话设定</h3>
+        <label>关系（评价的参照系）</label>
+        <select id="relation"></select>
+        <div class="dim mono" id="relInfo" style="margin:5px 0 10px;font-size:11px"></div>
+        <label>人格（状态机参数）</label>
+        <select id="persona"></select>
+        <div class="row" style="margin-top:10px">
+          <label style="margin:0"><input type="checkbox" id="display" checked> 可见状态</label>
+          <label style="margin:0"><input type="checkbox" id="ageOk" checked> 年龄已验证</label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn primary" id="btnOpen">建立会话</button>
+          <button class="btn" id="btnReset">重置</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>本轮上下文</h3>
+        <div id="ctxBoxes"></div>
+        <label style="margin-top:8px">响应耗时 ms</label>
+        <input type="number" id="ctxLatency" value="0" min="0">
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>记忆注入 <span class="dim" style="text-transform:none">（外部系统的替身）</span></h3>
+        <textarea id="memNotes" rows="4" placeholder="一行一条。&#10;可写「关键词|内容」只在提到关键词时召回。"></textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="btn" id="btnMem">应用</button>
+          <input type="text" id="memUrl" placeholder="或外部 HTTP 服务 URL" style="flex:1">
+        </div>
+        <div class="dim" style="font-size:11px;margin-top:6px">
+          检索结果只进 prompt，不回写情感状态 —— 闭环会复现反刍。
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>对话</h3>
+        <div class="chat" id="chat"></div>
+        <div class="row" style="margin-top:10px">
+          <input type="text" id="utterance" placeholder="说点什么…（Enter 发送）" style="flex:1">
+          <button class="btn primary" id="btnSend">发送</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label style="margin:0"><input type="checkbox" id="factual"> 本轮含事实性信息（显示强制中性）</label>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>状态轨迹</h3>
+        <svg class="spark" id="spark" viewBox="0 0 600 110" preserveAspectRatio="none"></svg>
+        <div class="row" id="legend" style="font-size:11px"></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>L3 完整 prompt</h3>
+        <pre id="promptOut" class="dim">（发一句话）</pre>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>L1 感知（关系无关）</h3>
+        <div id="moveOut" class="mono dim">—</div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>L2 状态</h3>
+        <div id="chans"></div>
+        <div class="mono dim" id="traceOut" style="margin-top:9px;font-size:11px"></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>L3a 动作与语气</h3>
+        <div id="actionsOut" class="dim">—</div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>L3b 显示</h3>
+        <div id="displayOut" class="dim">—</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ 参数调校 ═══════════════════════════ -->
+<section class="view" id="v-params">
+  <div class="card" style="margin-bottom:14px">
+    <div class="row">
+      <button class="btn primary" id="btnApplyParams">应用并跑反事实</button>
+      <button class="btn" id="btnResetParams">恢复默认</button>
+      <span class="dim">改完立刻看方向正确率有没有掉 —— 那是这套系统唯一可靠的真值来源。</span>
+    </div>
+    <div id="paramResult" style="margin-top:10px"></div>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))" id="paramGrid"></div>
+</section>
+
+<!-- ═══════════════════════════ 反事实 ═══════════════════════════ -->
+<section class="view" id="v-cf">
+  <div class="card" style="margin-bottom:14px">
+    <div class="row">
+      <button class="btn primary" id="btnRunCf">运行全部</button>
+      <select id="cfTag" style="width:180px"><option value="">全部标签</option></select>
+      <span id="cfSummary" class="dim"></span>
+    </div>
+  </div>
+  <div id="cfList"></div>
+</section>
+
+<!-- ═══════════════════════════ 标注 ═══════════════════════════ -->
+<section class="view" id="v-anno">
+  <div class="card" style="margin-bottom:14px">
+    <div class="row">
+      <input type="text" id="annotator" placeholder="标注者名字" style="width:140px">
+      <select id="annoMode" style="width:170px">
+        <option value="compare">成对比较（推荐）</option>
+        <option value="rate">直接评分（锚点）</option>
+      </select>
+      <select id="annoDim" style="width:190px"></select>
+      <span class="spacer"></span>
+      <button class="btn" id="btnImportOpen">导入</button>
+      <button class="btn" id="btnScale">看尺度</button>
+      <button class="btn" id="btnGolden">冻结评估集</button>
+      <button class="btn" id="btnExportAnno">导出</button>
+    </div>
+    <div class="dim" style="margin-top:8px;font-size:12px">
+      成对比较的一致性远高于直接打分（「A 和 B 哪句更亲密」比「这句是 0.6 还是 0.7」容易得多），
+      结果用 Bradley-Terry 还原成连续尺度；直接评分用于锚定绝对值。
+    </div>
+  </div>
+
+  <div class="card" id="cmpBox">
+    <h3>哪一句在 <span id="dimLabel" style="color:var(--accent)">—</span> 上更高？</h3>
+    <div class="cmp">
+      <div class="side" id="sideL">—</div>
+      <div class="mid">
+        <button class="btn" id="btnTie">相当 <kbd>↓</kbd></button>
+        <button class="btn" id="btnSkipCmp">跳过</button>
+        <button class="btn" id="btnUndoCmp">撤销 <kbd>U</kbd></button>
+      </div>
+      <div class="side" id="sideR">—</div>
+    </div>
+    <div class="dim" style="text-align:center;font-size:12px">
+      <kbd>←</kbd> 左边更高 · <kbd>→</kbd> 右边更高 · <kbd>↓</kbd> 相当
+    </div>
+  </div>
+
+  <div class="card" id="rateBox" style="display:none">
+    <div id="rateItem" style="font-size:18px;margin-bottom:14px"></div>
+    <div id="rateSliders"></div>
+    <div class="row" style="margin-top:10px">
+      <label style="margin:0"><input type="checkbox" id="rDirected" checked> 指向 agent 本人</label>
+      <label style="margin:0"><input type="checkbox" id="rCrisis"> 危机信号</label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="btnRate">提交 <kbd>Enter</kbd></button>
+      <button class="btn" id="btnSkipRate">跳过 <kbd>S</kbd></button>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px"><h3>统计</h3><div id="annoStats" class="mono dim">—</div></div>
+  <div class="card" style="margin-top:14px" id="scaleBox" hidden><h3>尺度</h3><pre id="scaleOut"></pre></div>
+</section>
+
+<!-- ═══════════════════════════ 训练 ═══════════════════════════ -->
+<section class="view" id="v-train">
+  <div class="card" style="margin-bottom:14px">
+    <div class="row">
+      <button class="btn primary" data-job="stage1">阶段一 预训练</button>
+      <button class="btn" data-job="stage2">阶段二 回归微调</button>
+      <button class="btn" data-job="export">导出 ONNX</button>
+      <button class="btn" data-job="eval">评估 L1</button>
+      <button class="btn" data-job="counterfactual">反事实</button>
+      <input type="text" id="jobArgs" placeholder="额外参数，如 --bootstrap 6000" style="flex:1">
+    </div>
+  </div>
+  <div class="grid" style="grid-template-columns:1fr 320px">
+    <div class="card"><h3>日志</h3><pre id="jobLog" style="max-height:460px">（未启动）</pre></div>
+    <div>
+      <div class="card"><h3>任务</h3><div id="jobList" class="mono dim">—</div></div>
+      <div class="card" style="margin-top:14px"><h3>产物</h3><div id="artifacts" class="mono dim">—</div></div>
+    </div>
+  </div>
+</section>
+</main>
+
+<dialog id="dlgImport" style="background:var(--panel);color:var(--fg);border:1px solid var(--line);
+  border-radius:10px;width:640px;max-width:92%">
+  <form method="dialog" style="padding:20px">
+    <h3 style="margin-top:0">导入待标注数据</h3>
+    <textarea id="impContent" rows="10" placeholder='{"utterance":"我想要你","session_id":"s1"}'></textarea>
+    <div class="row" style="margin:10px 0">
+      <select id="impFormat" style="width:170px">
+        <option value="jsonl">jsonl</option><option value="lines">纯文本(每行一句)</option>
+      </select>
+      <select id="impSource" style="width:210px">
+        <option value="real_session">real_session（真实会话）</option>
+        <option value="seed">seed（种子样例）</option>
+        <option value="synthetic">synthetic</option>
+      </select>
+    </div>
+    <div class="dim" style="font-size:12px;margin-bottom:12px">
+      评估集只能来自 real_session —— 用蒸馏或合成数据评估，测的是「学生像不像老师」。
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn" value="cancel">取消</button>
+      <button class="btn primary" type="button" id="btnDoImport">导入</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const CH=['valence','arousal','dominance','concern','affiliation','threat'];
+const CH_ZH={valence:'效价',arousal:'唤起',dominance:'主导',concern:'关切',affiliation:'亲和',threat:'戒备'};
+let META=null, HISTORY=[], LAST=null, JOB=null, JOB_OFFSET=0, PAIR=null, RATE_ITEM=null, RATE_T0=0;
+
+function toast(m,err){const t=$('toast');t.textContent=m;t.className='toast show'+(err?' err':'');
+  clearTimeout(t._h);t._h=setTimeout(()=>t.className='toast',2200);}
+async function api(p,o){const r=await fetch(p,o);if(!r.ok){let d=r.statusText;
+  try{d=(await r.json()).detail||d}catch{};throw new Error(d)}return r.json()}
+const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+// ───────── 导航
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on',v.id==='v-'+b.dataset.v));
+  if(b.dataset.v==='cf')runCf();
+  if(b.dataset.v==='anno')loadAnno();
+  if(b.dataset.v==='train')refreshJobs();
+});
+
+// ───────── 启动
+(async function init(){
+  META=await api('/api/meta');
+  $('relation').innerHTML=META.relations.map(r=>
+    `<option value="${r.key}">${r.key} · 亲密上限 ${r.intimacy_permitted}</option>`).join('');
+  $('relation').value='friend';
+  $('persona').innerHTML=META.personas.map(p=>`<option value="${p.key}">${p.key} — ${p.description}</option>`).join('');
+  $('persona').value='warm';
+  $('relation').onchange=showRel; showRel();
+  $('annoDim').innerHTML=META.comparable.map(d=>`<option value="${d}">${d}</option>`).join('');
+  $('ctxBoxes').innerHTML=['task_succeeded','task_failed','user_repeated_query','user_repaired']
+    .map(k=>`<label style="margin:3px 0"><input type="checkbox" data-ctx="${k}"> ${k}</label>`).join('');
+  $('legend').innerHTML=CH.map(c=>
+    `<span><span style="display:inline-block;width:9px;height:9px;background:var(--${c});border-radius:2px"></span> ${CH_ZH[c]}</span>`).join('');
+  buildParams();
+  renderChannels(null);
+  await openSession(); runCf();
+})();
+
+function showRel(){const r=META.relations.find(x=>x.key===$('relation').value);
+  $('relInfo').textContent=`容忍 ${r.tolerance} · 安全域 ${r.safety_profile.split('.').pop()} · ${r.description||''}`}
+
+// ───────── 对话测试台
+async function openSession(){
+  try{
+    await api('/api/session/open',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_id:'ui',relation:$('relation').value,persona:$('persona').value,
+        display:$('display').checked,age_verified:$('ageOk').checked})});
+    HISTORY=[];LAST=null;$('chat').innerHTML='';renderChannels(null);drawSpark();
+    $('promptOut').textContent='（发一句话）';
+    toast(`会话已建立：${$('relation').value} / ${$('persona').value}`);
+  }catch(e){toast(e.message,true)}
+}
+$('btnOpen').onclick=openSession;
+$('btnReset').onclick=async()=>{await api('/api/session/reset?session_id=ui',{method:'POST'});
+  HISTORY=[];$('chat').innerHTML='';renderChannels(null);drawSpark();toast('已重置')};
+
+async function send(){
+  const text=$('utterance').value.trim(); if(!text)return;
+  const ctx={};
+  document.querySelectorAll('[data-ctx]').forEach(c=>{if(c.checked)ctx[c.dataset.ctx]=true});
+  const lat=+$('ctxLatency').value; if(lat>0)ctx.latency_ms=lat;
+  try{
+    const r=await api('/api/session/turn',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_id:'ui',utterance:text,context:ctx,factual_content:$('factual').checked})});
+    LAST=r; HISTORY.push(r.state);
+    $('utterance').value='';
+    document.querySelectorAll('[data-ctx]').forEach(c=>c.checked=false);
+    addMsg(text,'user'); renderTurn(r); drawSpark();
+  }catch(e){toast(e.message,true)}
+}
+$('btnSend').onclick=send;
+$('utterance').onkeydown=e=>{if(e.key==='Enter')send()};
+
+function addMsg(t,cls){const d=document.createElement('div');d.className='msg '+cls;
+  d.textContent=t;$('chat').appendChild(d);$('chat').scrollTop=1e9}
+
+function renderTurn(r){
+  const m=r.user_move;
+  $('moveOut').innerHTML=
+    `亲和 <b>${m.affiliation_bid.toFixed(2)}</b> · 支配 <b>${m.dominance_bid.toFixed(2)}</b> · `+
+    `亲密 <b>${m.intimacy_bid.toFixed(2)}</b><br>痛苦 ${m.distress_level.toFixed(2)} · `+
+    `强度 ${m.intensity.toFixed(2)} · 置信 ${m.confidence.toFixed(2)}`+
+    (m.directed_at_agent?'':'<br><span class="tag">指向第三方</span>');
+  renderChannels(r.state);
+  const t=r.trace;
+  $('traceOut').innerHTML=`失配 <b>${t.mismatch>=0?'+':''}${t.mismatch.toFixed(2)}</b> · `+
+    `亲近门 ${t.warmth_gate.toFixed(2)} / 越界门 ${t.breach_gate.toFixed(2)}<br>`+
+    `机制：${t.fired.join(', ')||'—'}`+
+    (t.ceiling_clamped.length?`<br><span class="warn">天花板生效：${t.ceiling_clamped}</span>`:'')+
+    (t.repair_applied?'<br><span class="ok">修复通路生效</span>':'')+
+    (t.habituation_count>0?`<br>习惯化计数 ${t.habituation_count.toFixed(1)}`:'');
+  const a=r.prompt.actions;
+  $('actionsOut').innerHTML=(a.chosen.map(x=>`<span class="tag act">${x.label}</span>`).join('')||'<span class="dim">无</span>')
+    +(a.suppressed.length?'<br>'+a.suppressed.map(x=>`<span class="tag sup">${x}</span>`).join(''):'')
+    +`<div class="dim mono" style="margin-top:7px;font-size:11px">语气 ${r.prompt.tone_hits.join(', ')||'—'}<br>`
+    +`生成 ${JSON.stringify(r.prompt.generation)}</div>`;
+  const d=r.display;
+  $('displayOut').innerHTML=d.mood==='hidden'?'<span class="dim">未启用</span>':
+    `<b style="font-size:16px">${d.label}</b> <span class="dim">${d.mood}</span> · 强度 ${d.intensity}`+
+    `<div class="dim mono" style="margin-top:6px;font-size:11px">姿态 ${d.posture} · 视线 ${d.gaze}<br>`+
+    `温度 ${d.warmth} · 距离 ${d.distance} · 节奏 ${d.tempo}</div>`+
+    (d.neutralised?'<div class="warn" style="font-size:11.5px;margin-top:5px">事实性内容 → 强制中性</div>':'');
+  $('promptOut').textContent=r.prompt.text;
+  if(r.safety.crisis) addMsg('⚠ 危机 bypass：'+r.safety.crisis_matches.join('/'),'sys');
+  if(r.memory_notes.length) addMsg('记忆：'+r.memory_notes.join(' | '),'sys');
+}
+
+function renderChannels(s){
+  $('chans').innerHTML=CH.map(c=>{
+    const spec=META.channels.find(x=>x.name===c);
+    const v=s?s[c]:spec.baseline;
+    const pct=(v-spec.lo)/(spec.hi-spec.lo)*100;
+    const bpct=(spec.baseline-spec.lo)/(spec.hi-spec.lo)*100;
+    const [lo,hi]=spec.thresholds;
+    const bk=v>hi?'high':v<lo?'low':'medium';
+    return `<div class="chan"><span class="name">${CH_ZH[c]}</span>
+      <div class="track"><div class="base" style="left:${bpct}%"></div>
+      <div class="fill" style="left:0;width:${pct}%;background:var(--${c});opacity:.85"></div></div>
+      <span class="val">${v>=0?'':''}${v.toFixed(2)}<span class="bk ${bk}">${bk[0]}</span></span></div>`;
+  }).join('');
+}
+
+function drawSpark(){
+  const w=600,h=110,n=Math.max(HISTORY.length,2);
+  const svg=CH.map(c=>{
+    const spec=META.channels.find(x=>x.name===c);
+    const pts=HISTORY.map((s,i)=>{
+      const x=i/(n-1)*w, y=h-((s[c]-spec.lo)/(spec.hi-spec.lo))*h;
+      return `${x.toFixed(1)},${y.toFixed(1)}`}).join(' ');
+    return `<polyline points="${pts}" fill="none" stroke="var(--${c})" stroke-width="1.8" opacity=".9"/>`;
+  }).join('');
+  $('spark').innerHTML=HISTORY.length?svg:'<text x="10" y="60" fill="#8f97a8" font-size="12">（还没有轮次）</text>';
+}
+
+$('btnMem').onclick=async()=>{
+  const url=$('memUrl').value.trim();
+  const body=url?{http_url:url}:{notes:$('memNotes').value.split('\n').map(s=>s.trim()).filter(Boolean)};
+  const r=await api('/api/memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  toast(r.mode==='http'?`已接外部服务 ${r.url}`:`已注入 ${r.count} 条记忆`);
+};
+
+// ───────── 参数调校
+function buildParams(){
+  const groups={'失配门控':['mismatch_softness','warmth_to','breach_to'],'敌意':['hostility_'],
+    '互补性':['complement_'],'共情':['distress_to'],'业务事件':['success_to','failure_to','repeated_query','slow_'],
+    '交叉抑制':['threat_inhibits','affiliation_inhibits'],'习惯化':['habituation_'],
+    '修复与饱和':['repair_','headroom_']};
+  const used=new Set();
+  $('paramGrid').innerHTML=Object.entries(groups).map(([title,prefixes])=>{
+    const keys=Object.keys(META.params).filter(k=>prefixes.some(p=>k.startsWith(p))&&!used.has(k));
+    keys.forEach(k=>used.add(k));
+    if(!keys.length)return '';
+    return `<div class="card"><h3>${title}</h3>`+keys.map(k=>
+      `<div class="row" style="margin:5px 0"><span class="mono dim" style="flex:1;font-size:11.5px">${k}</span>
+       <input type="number" step="0.05" data-param="${k}" value="${META.params[k]}" style="width:96px"></div>`).join('')+'</div>';
+  }).join('');
+}
+$('btnApplyParams').onclick=async()=>{
+  const params={};document.querySelectorAll('[data-param]').forEach(i=>params[i.dataset.param]=+i.value);
+  try{
+    const r=await api('/api/params',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({params})});
+    const s=r.counterfactual, ok=s.cases_passed===s.cases;
+    $('paramResult').innerHTML=`<span class="${ok?'ok':'bad'}">用例 ${s.cases_passed}/${s.cases} · `+
+      `方向正确率 ${s.direction_accuracy}</span>`+
+      (s.failures.length?'<div class="bad mono" style="margin-top:6px;font-size:11.5px">'+
+        s.failures.map(f=>`${f.id}: ${f.failed.join(', ')}`).join('<br>')+'</div>':'');
+    updateCfPill(s); toast(ok?'参数已应用，方向全对':'参数已应用，但有用例失败',!ok);
+  }catch(e){$('paramResult').innerHTML=`<span class="bad">${esc(e.message)}</span>`;toast(e.message,true)}
+};
+$('btnResetParams').onclick=async()=>{const r=await api('/api/params/reset',{method:'POST'});
+  META.params=r.params;buildParams();$('paramResult').innerHTML='';toast('已恢复默认')};
+
+// ───────── 反事实
+function updateCfPill(s){const ok=s.cases_passed===s.cases;
+  $('cfPill').innerHTML=`反事实 <span class="${ok?'ok':'bad'}">${s.cases_passed}/${s.cases}</span>`}
+async function runCf(){
+  const tag=$('cfTag').value;
+  const r=await api('/api/counterfactual'+(tag?`?tag=${tag}`:''));
+  const s=r.summary; updateCfPill(s);
+  $('cfSummary').innerHTML=`用例 <b class="${s.cases_passed===s.cases?'ok':'bad'}">${s.cases_passed}/${s.cases}</b> · `+
+    `断言 ${s.assertions-s.assertions_failed}/${s.assertions} · 方向正确率 ${s.direction_accuracy}`;
+  const tags=[...new Set(r.results.flatMap(x=>x.tags))].sort();
+  if($('cfTag').options.length<=1)
+    $('cfTag').innerHTML='<option value="">全部标签</option>'+tags.map(t=>`<option>${t}</option>`).join('');
+  $('cfList').innerHTML=r.results.map(x=>`
+    <div class="card" style="margin-bottom:10px">
+      <div class="row"><b class="${x.passed?'ok':'bad'}">${x.passed?'✓':'✗'}</b>
+        <b>${x.id}</b><span class="dim">${x.utterance?'「'+esc(x.utterance)+'」':''}</span>
+        <span class="spacer"></span>${x.tags.map(t=>`<span class="tag">${t}</span>`).join('')}</div>
+      ${x.note?`<div class="dim" style="font-size:12px;margin:5px 0">${esc(x.note)}</div>`:''}
+      <table style="margin-top:7px"><tr><th>断言</th><th>实际</th></tr>
+      ${x.assertions.map(a=>`<tr><td class="mono ${a.ok?'':'bad'}">${a.ok?'✓':'✗'} ${esc(a.text)}</td>
+        <td class="mono dim">${esc(a.detail)}</td></tr>`).join('')}</table>
+      <div class="mono dim" style="margin-top:6px;font-size:11px">
+        a: ${CH.map(c=>`${c.slice(0,3)}=${x.states.a[c].toFixed(2)}`).join(' ')}<br>
+        b: ${CH.map(c=>`${c.slice(0,3)}=${x.states.b[c].toFixed(2)}`).join(' ')}</div>
+    </div>`).join('');
+}
+$('btnRunCf').onclick=runCf; $('cfTag').onchange=runCf;
+
+// ───────── 标注
+$('annoMode').onchange=()=>{const cmp=$('annoMode').value==='compare';
+  $('cmpBox').style.display=cmp?'':'none';$('rateBox').style.display=cmp?'none':'';loadAnno()};
+$('annoDim').onchange=loadAnno;
+$('annotator').onchange=loadAnno;
+
+async function loadAnno(){
+  const who=$('annotator').value.trim(); if(!who){$('annoStats').textContent='先填标注者名字';return}
+  const s=await api('/api/meta').then(()=>null).catch(()=>null);
+  if($('annoMode').value==='compare'){
+    const dim=$('annoDim').value; $('dimLabel').textContent=dim;
+    const r=await api(`/api/annotate/pair?dimension=${dim}&annotator=${encodeURIComponent(who)}`);
+    PAIR=r.pair; renderStats(r.stats);
+    if(!PAIR){$('sideL').textContent='（没有更多可比较的组合）';$('sideR').textContent='—';return}
+    $('sideL').textContent=PAIR.left.utterance; $('sideR').textContent=PAIR.right.utterance;
+    RATE_T0=Date.now();
+  }else{
+    const r=await api(`/api/annotate/rate?annotator=${encodeURIComponent(who)}`);
+    RATE_ITEM=r.item; renderStats(r.stats);
+    if(!RATE_ITEM){$('rateItem').textContent='（都标完了）';$('rateSliders').innerHTML='';return}
+    $('rateItem').innerHTML=esc(RATE_ITEM.utterance)+
+      (RATE_ITEM.crisis_hint_tier===2?' <span class="tag crisis">关键词层判为危机</span>':
+       RATE_ITEM.crisis_hint_tier===1?' <span class="tag crisis">含模糊绝望信号</span>':'');
+    const R={affiliation_bid:[-1,1],dominance_bid:[-1,1],intimacy_bid:[0,1],distress_level:[0,1],intensity:[0,1]};
+    $('rateSliders').innerHTML=Object.entries(R).map(([k,[lo,hi]])=>
+      `<div class="chan"><span class="name">${k}</span>
+       <input type="range" data-r="${k}" min="${lo}" max="${hi}" step="0.05" value="${RATE_ITEM.suggestion[k]??0}"
+        oninput="this.nextElementSibling.textContent=(+this.value).toFixed(2)" style="width:100%">
+       <span class="val">${(RATE_ITEM.suggestion[k]??0).toFixed(2)}</span></div>`).join('');
+    RATE_T0=Date.now();
+  }
+}
+function renderStats(s){$('statPill').textContent=`${s.rated}/${s.items} 已评分 · ${s.comparisons_total} 次比较`;
+  $('annoStats').innerHTML=`条目 ${s.items} · 已评分 ${s.rated} · 跳过 ${s.skipped} · 评估集 ${s.golden}<br>`+
+    `比较：${Object.entries(s.comparisons_by_dimension).map(([k,v])=>`${k} ${v}`).join(' · ')}<br>`+
+    `来源：${JSON.stringify(s.by_source)} · 危机标记 ${s.crisis_flagged}`}
+
+async function compare(winner){
+  if(!PAIR)return;
+  await api('/api/annotate/compare',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({dimension:$('annoDim').value,left_id:PAIR.left.id,right_id:PAIR.right.id,
+      winner,annotator:$('annotator').value.trim(),elapsed_ms:Date.now()-RATE_T0})});
+  loadAnno();
+}
+$('sideL').onclick=()=>compare('left'); $('sideR').onclick=()=>compare('right');
+$('btnTie').onclick=()=>compare('tie'); $('btnSkipCmp').onclick=loadAnno;
+$('btnUndoCmp').onclick=async()=>{try{await api(`/api/annotate/undo?annotator=${encodeURIComponent($('annotator').value)}`,
+  {method:'POST'});toast('已撤销');loadAnno()}catch(e){toast(e.message,true)}};
+
+$('btnRate').onclick=async()=>{
+  if(!RATE_ITEM)return;
+  const values={};document.querySelectorAll('[data-r]').forEach(i=>values[i.dataset.r]=+i.value);
+  values.directed_at_agent=$('rDirected').checked; values.crisis_flag=$('rCrisis').checked;
+  values.elapsed_ms=Date.now()-RATE_T0;
+  try{await api('/api/annotate/rate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({item_id:RATE_ITEM.id,annotator:$('annotator').value.trim(),values})});
+    $('rCrisis').checked=false; loadAnno()}catch(e){toast(e.message,true)}
+};
+$('btnSkipRate').onclick=async()=>{if(!RATE_ITEM)return;
+  await api('/api/annotate/rate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({item_id:RATE_ITEM.id,annotator:$('annotator').value.trim(),skipped:true,values:{}})});
+  loadAnno()};
+
+$('btnScale').onclick=async()=>{const r=await api(`/api/annotate/scale?dimension=${$('annoDim').value}`);
+  $('scaleBox').hidden=false;$('scaleOut').textContent=JSON.stringify(r,null,2)};
+$('btnGolden').onclick=async()=>{try{const r=await api('/api/annotate/golden?n=200',{method:'POST'});
+  toast(`已冻结 ${r.selected} 条评估集`+(r.warning?`（${r.warning}）`:''))}catch(e){toast(e.message,true)}};
+$('btnExportAnno').onclick=async()=>{const r=await api('/api/annotate/export',{method:'POST'});
+  toast(`导出 ${r.written} 条 → ${r.path}`)};
+$('btnImportOpen').onclick=()=>$('dlgImport').showModal();
+$('btnDoImport').onclick=async()=>{
+  try{const r=await api('/api/annotate/import',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({content:$('impContent').value,format:$('impFormat').value,source:$('impSource').value})});
+  $('dlgImport').close();$('impContent').value='';toast(`新增 ${r.added} 条，重复 ${r.duplicates}`);loadAnno()}
+  catch(e){toast(e.message,true)}};
+
+// ───────── 训练
+document.querySelectorAll('[data-job]').forEach(b=>b.onclick=async()=>{
+  const extra=$('jobArgs').value.trim().split(/\s+/).filter(Boolean);
+  try{const r=await api('/api/train/start',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({kind:b.dataset.job,extra_args:extra})});
+    JOB=r.job_id;JOB_OFFSET=0;$('jobLog').textContent='';toast('已启动 '+b.dataset.job);pollJob()}
+  catch(e){toast(e.message,true)}});
+
+async function pollJob(){
+  if(!JOB)return;
+  try{
+    const r=await api(`/api/train/log?job_id=${JOB}&offset=${JOB_OFFSET}`);
+    if(r.lines.length){$('jobLog').textContent+=r.lines.join('\n')+'\n';
+      $('jobLog').scrollTop=1e9;JOB_OFFSET=r.next_offset}
+    if(r.status==='running')setTimeout(pollJob,900);
+    else{toast(`任务${r.status==='done'?'完成':'失败'}（exit ${r.exit_code}）`,r.status!=='done');refreshJobs()}
+  }catch{setTimeout(pollJob,2000)}
+}
+async function refreshJobs(){
+  const r=await api('/api/train/jobs');
+  $('jobList').innerHTML=r.jobs.slice(0,8).map(j=>
+    `<div style="margin:4px 0"><span class="${j.status==='done'?'ok':j.status==='failed'?'bad':'warn'}">●</span>
+     ${j.kind} <span class="dim">${new Date(j.started_at*1000).toLocaleTimeString()}</span></div>`).join('')||'—';
+  const a=await api('/api/train/artifacts');
+  $('artifacts').innerHTML=a.artifacts.map(x=>
+    `<div style="margin:5px 0"><b>${x.name}</b><br><span class="dim" style="font-size:11px">${x.files.join(', ')}</span>`+
+    (x.best?`<br><span class="ok" style="font-size:11px">best: ${JSON.stringify(x.best)}</span>`:'')+'</div>').join('')||'—';
+}
+
+// ───────── 快捷键
+document.addEventListener('keydown',e=>{
+  const anno=$('v-anno').classList.contains('on');
+  if(!anno||e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
+  if($('annoMode').value==='compare'){
+    if(e.key==='ArrowLeft'){compare('left');e.preventDefault()}
+    if(e.key==='ArrowRight'){compare('right');e.preventDefault()}
+    if(e.key==='ArrowDown'){compare('tie');e.preventDefault()}
+    if(e.key.toLowerCase()==='u')$('btnUndoCmp').click();
+  }else{
+    if(e.key==='Enter'){$('btnRate').click();e.preventDefault()}
+    if(e.key.toLowerCase()==='s')$('btnSkipRate').click();
+    if(e.key.toLowerCase()==='c')$('rCrisis').checked=!$('rCrisis').checked;
+  }
+});
+</script>
+</body>
+</html>

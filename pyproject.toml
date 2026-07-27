@@ -24,7 +24,7 @@ training = [
 mac = [
     "mlx-lm",
 ]
-annotate = [
+studio = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
 ]
