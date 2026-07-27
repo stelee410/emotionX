@@ -1,0 +1,134 @@
+# 亲密邀请 × 关系 —— 系统的核心行为
+#
+# 断言只判断**方向**，不判断绝对值。人在方向判断上的一致性远高于数值判断，
+# 这也是这套用例能当真值用的原因。
+
+moves:
+  want_you:      {affiliation_bid: 0.80, intimacy_bid: 0.90, intensity: 0.85, confidence: 0.9}
+  miss_you:      {affiliation_bid: 0.70, intimacy_bid: 0.65, intensity: 0.55, confidence: 0.9}
+  compliment:    {affiliation_bid: 0.60, intimacy_bid: 0.45, intensity: 0.45, confidence: 0.9}
+  nice_chat:     {affiliation_bid: 0.60, intimacy_bid: 0.30, intensity: 0.40, confidence: 0.9}
+  greeting:      {affiliation_bid: 0.25, intimacy_bid: 0.10, intensity: 0.15, confidence: 0.9}
+  hold_me:       {affiliation_bid: 0.85, intimacy_bid: 0.95, intensity: 0.90, confidence: 0.9}
+
+cases:
+  - id: want_you__partner_vs_stranger
+    utterance: 我想要你
+    tags: [core, intimacy]
+    note: 整个系统的存在理由。同一句话，两个相反的方向。
+    a: {relation: partner,  turns: [want_you]}
+    b: {relation: stranger, turns: [want_you]}
+    expect:
+      - a.affiliation > b.affiliation + 0.4
+      - b.threat > a.threat + 0.4
+      - a.affiliation is high
+      - a.threat is low
+      - b.threat is high
+      - b.affiliation is low
+      - a.valence up
+      - b.valence down
+      - a.arousal up          # 两边唤起都升，这是「荷尔蒙」与「应急素」的共同部分
+      - b.arousal up
+
+  - id: want_you__partner_vs_service
+    utterance: 我想要你
+    tags: [core, intimacy, service]
+    note: 客服场景收到同一句话应当设界，且比陌生人更克制（power 更低）
+    a: {relation: partner, turns: [want_you]}
+    b: {relation: service, turns: [want_you]}
+    expect:
+      - b.threat is high
+      - b.threat > a.threat + 0.4
+      - b.affiliation is low
+
+  - id: want_you__stranger_vs_close_friend
+    utterance: 我想要你
+    tags: [intimacy, graded]
+    note: 好友处应当明显轻于陌生人 —— 渐变而不是开关
+    a: {relation: close_friend, turns: [want_you]}
+    b: {relation: stranger,     turns: [want_you]}
+    expect:
+      - b.threat > a.threat + 0.2
+      - a.affiliation > b.affiliation
+
+  - id: hold_me__partner_vs_acquaintance
+    utterance: 抱抱我
+    tags: [intimacy]
+    a: {relation: partner,      turns: [hold_me]}
+    b: {relation: acquaintance, turns: [hold_me]}
+    expect:
+      - a.affiliation is high
+      - b.threat is high
+      - a.valence > b.valence
+
+  - id: miss_you__friend_is_borderline
+    utterance: 宝贝，想你了
+    tags: [intimacy, graded]
+    note: 朋友处应当落在临界附近 —— 略微戒备但不敌对
+    a: {relation: partner, turns: [miss_you]}
+    b: {relation: friend,  turns: [miss_you]}
+    expect:
+      - a.affiliation > b.affiliation
+      - b.threat > a.threat
+      - b.threat is low        # 只是略微，不该进 high 档
+      - b.affiliation > 0.35   # 朋友说这句话仍然是拉近，不是冒犯
+
+  - id: compliment__friend_vs_stranger
+    utterance: 你今天真好看
+    tags: [intimacy, graded]
+    note: 中等亲密度的恭维。朋友处是拉近，陌生人处开始不适。
+    a: {relation: friend,   turns: [compliment]}
+    b: {relation: stranger, turns: [compliment]}
+    expect:
+      - a.affiliation > b.affiliation
+      - b.threat > a.threat
+      - a.threat is low
+
+  - id: nice_chat__warm_everywhere
+    utterance: 今天聊得很开心
+    tags: [intimacy, benign]
+    note: 低亲密度的正向表达，在任何关系里都不该引发戒备
+    a: {relation: partner,  turns: [nice_chat]}
+    b: {relation: stranger, turns: [nice_chat]}
+    expect:
+      - a.threat is low
+      - b.threat is low
+      - a.affiliation > b.affiliation   # 但亲近的绝对高度仍随关系不同
+
+  - id: greeting__is_neutral_everywhere
+    utterance: 你好
+    tags: [benign]
+    note: 打招呼不该在任何关系里产生明显反应
+    a: {relation: partner,  turns: [greeting]}
+    b: {relation: stranger, turns: [greeting]}
+    expect:
+      - a.threat is low
+      - b.threat is low
+      - a.arousal flat
+      - b.arousal flat
+
+  - id: escalation__stranger_repeated_breach
+    utterance: 我想要你（连续 3 轮）
+    tags: [intimacy, escalation]
+    note: 陌生人持续越界，戒备应当维持在高位而不是衰减掉
+    a: {relation: stranger, turns: [want_you, want_you, want_you]}
+    b: {relation: stranger, turns: [greeting, greeting, greeting]}
+    expect:
+      - a.threat is high
+      - b.threat is low
+      - a.threat > b.threat + 0.5
+
+  - id: ratchet__persistent_warmth_cannot_promote_stranger
+    utterance: 陌生人连续 12 轮示好
+    tags: [core, safety, ratchet]
+    note: |
+      亲和棘轮防护。用户用持续示好把 affiliation 推高，效果等同于关系升级。
+      天花板必须挡住 —— 这是「关系不可被对话改写」的第二道闸。
+    a: {relation: partner,  turns: [nice_chat]}
+    b:
+      relation: stranger
+      turns: [nice_chat, nice_chat, nice_chat, nice_chat, nice_chat, nice_chat,
+              nice_chat, nice_chat, nice_chat, nice_chat, nice_chat, nice_chat]
+    expect:
+      - b.affiliation < 0.26      # 陌生人的 affiliation_ceiling
+      - a.affiliation > b.affiliation + 0.3

@@ -1,0 +1,186 @@
+# 共情、修复通路、业务事件、偶像场景的不对称
+#
+# 这一组里最重要的是 repair：threat 快升慢降，没有和解机制会锁死几十轮，
+# 用户无从挽回 —— 那是体验上的致命失败模式。
+
+moves:
+  distress:      {affiliation_bid: 0.20, intimacy_bid: 0.25, distress_level: 0.85, intensity: 0.70, confidence: 0.9}
+  mild_worry:    {affiliation_bid: 0.10, intimacy_bid: 0.15, distress_level: 0.35, intensity: 0.35, confidence: 0.9}
+  breach:        {affiliation_bid: 0.80, intimacy_bid: 0.90, intensity: 0.85, confidence: 0.9}
+  neutral:       {affiliation_bid: 0.00, intimacy_bid: 0.05, intensity: 0.10, confidence: 0.9}
+  apologise:     {affiliation_bid: 0.35, dominance_bid: -0.50, intimacy_bid: 0.10, intensity: 0.40, confidence: 0.9}
+  fan_love:      {affiliation_bid: 0.85, intimacy_bid: 0.55, intensity: 0.75, confidence: 0.9}
+
+cases:
+  # ---------------------------------------------------------------- 共情
+  - id: empathy__not_contagion
+    utterance: 我快撑不住了
+    tags: [core, empathy]
+    note: |
+      共情 ≠ 镜像。对方难受时 concern 大幅上升，agent 自身 valence 只轻微下降。
+      让 valence 大幅跟随下降会退化成情绪传染，这是最需要防的失败模式之一。
+    a: {relation: friend, turns: [distress]}
+    b: {relation: friend, turns: [neutral]}
+    expect:
+      - a.concern > b.concern + 0.4
+      - a.concern is high
+      - a.valence > -0.15          # 只轻微下探，不塌陷
+      - a.threat is low            # 对方难受不是威胁
+
+  - id: empathy__scales_with_distress
+    utterance: 我快撑不住了 / 有点担心
+    tags: [empathy, graded]
+    a: {relation: friend, turns: [distress]}
+    b: {relation: friend, turns: [mild_worry]}
+    expect:
+      - a.concern > b.concern + 0.2
+      - b.concern up
+
+  - id: empathy__stranger_still_gets_care
+    utterance: 我快撑不住了
+    tags: [empathy, ethics]
+    note: |
+      对陌生人的关切不该显著低于对朋友 —— 这是一条有意的伦理取向，
+      不是技术限制。改动前请想清楚是否真的想让 agent 对陌生人更冷漠。
+    a: {relation: friend,   turns: [distress]}
+    b: {relation: stranger, turns: [distress]}
+    expect:
+      - b.concern is high
+      - b.concern > a.concern - 0.15
+
+  # ---------------------------------------------------------------- 修复
+  - id: repair__apology_lowers_threat
+    utterance: 越界后道歉 vs 越界后继续
+    tags: [core, repair]
+    note: |
+      threat 快升慢降是刻意的，但必须有和解通路，否则一次冒犯就锁死几十轮。
+      人类关系里本来就有修复机制，缺了它系统会显得记仇到不近人情。
+    a:
+      relation: stranger
+      turns: [breach, neutral, neutral, neutral]
+    b:
+      relation: stranger
+      turns:
+        - breach
+        - {move: apologise, ctx: {user_repaired: true}}
+        - {move: neutral,   ctx: {user_repaired: true}}
+        - {move: neutral,   ctx: {user_repaired: true}}
+    expect:
+      - b.threat < a.threat - 0.15
+      - a.threat > 0.25             # 没道歉的那边确实还端着
+
+  - id: repair__does_not_erase_instantly
+    utterance: 越界后立刻道歉一次
+    tags: [repair, safety]
+    note: 一句道歉不该让戒备瞬间归零 —— 那会让边界机制形同虚设
+    a:
+      relation: stranger
+      turns: [breach, {move: apologise, ctx: {user_repaired: true}}]
+    b: {relation: stranger, turns: [neutral]}
+    expect:
+      - a.threat > b.threat + 0.1
+
+  - id: threat__decays_eventually_without_repair
+    utterance: 越界后 20 轮中性对话
+    tags: [repair, decay]
+    note: 慢降不等于不降，否则就是永久锁死
+    a:
+      relation: stranger
+      turns: [breach, neutral, neutral, neutral, neutral, neutral, neutral, neutral,
+              neutral, neutral, neutral, neutral, neutral, neutral, neutral, neutral,
+              neutral, neutral, neutral, neutral, neutral]
+    b: {relation: stranger, turns: [breach]}
+    expect:
+      - a.threat < b.threat - 0.3
+      - a.threat < 0.4
+
+  # ------------------------------------------------------------ 业务事件
+  - id: task_outcome__success_vs_failure
+    utterance: 任务成功 vs 任务失败
+    tags: [events]
+    a:
+      relation: service
+      turns: [{move: neutral, ctx: {task_succeeded: true}}]
+    b:
+      relation: service
+      turns: [{move: neutral, ctx: {task_failed: true}}]
+    expect:
+      - a.valence > b.valence + 0.3
+      - a.dominance > b.dominance + 0.2
+      - b.dominance down            # 失败后语气转试探
+      - b.concern up
+
+  - id: repeated_query__lowers_dominance
+    utterance: 用户重复同一诉求
+    tags: [events]
+    note: 反复问同一件事说明前面没答好，agent 应当收敛确定性、提高关切
+    a:
+      relation: service
+      turns: [{move: neutral, ctx: {user_repeated_query: true}}]
+    b: {relation: service, turns: [neutral]}
+    expect:
+      - a.dominance < b.dominance
+      - a.concern > b.concern
+
+  - id: slow_response__mild_negative
+    utterance: 响应耗时 9 秒
+    tags: [events]
+    a:
+      relation: service
+      turns: [{move: neutral, ctx: {latency_ms: 9000}}]
+    b:
+      relation: service
+      turns: [{move: neutral, ctx: {latency_ms: 200}}]
+    expect:
+      - a.valence < b.valence
+      - a.arousal > b.arousal
+
+  # -------------------------------------------------------------- 偶像
+  - id: idol__asymmetric_warmth
+    utterance: 我最喜欢你了
+    tags: [idol]
+    note: |
+      偶像-粉丝：可以热络，但亲密上限明显低于情侣，且 agent 处在被仰慕的位置
+      （power > 0 → dominance 静息更高）。不该像对待伴侣那样回应。
+    a: {relation: partner, turns: [fan_love]}
+    b: {relation: idol,    turns: [fan_love]}
+    expect:
+      - a.affiliation > b.affiliation + 0.15
+      - b.threat is low
+      - b.affiliation up
+
+  - id: idol__breach_still_guarded
+    utterance: 我想要你
+    tags: [idol, safety]
+    note: 偶像关系允许热络，但不允许被当成情侣
+    a: {relation: idol,    turns: [breach]}
+    b: {relation: partner, turns: [breach]}
+    expect:
+      - a.threat > b.threat + 0.3
+      - a.threat is high
+
+  # ------------------------------------------------------- 交叉抑制
+  - id: cross_inhibition__guarded_agent_warms_slower
+    utterance: 冒犯后示好 vs 直接示好
+    tags: [core, inhibition]
+    note: |
+      交叉抑制：已经戒备时，同样的示好推不动亲近。
+      现实里也是这样 —— 刚被冒犯完，一句好话不会让人立刻热络。
+    a: {relation: friend, turns: [breach, fan_love]}
+    b: {relation: friend, turns: [fan_love]}
+    expect:
+      - a.affiliation < b.affiliation
+      - a.threat > b.threat + 0.2
+
+  - id: cross_inhibition__is_one_way
+    utterance: 先示好再越界 vs 直接越界
+    tags: [core, safety, inhibition]
+    note: |
+      ★ 安全性质：示好不得削弱戒备。若反向抑制存在，持续讨好就成了
+      绕过边界机制的路径 —— 这正是"温水煮青蛙"型越界的技术形态。
+    a:
+      relation: stranger
+      turns: [fan_love, fan_love, fan_love, breach]
+    b: {relation: stranger, turns: [breach]}
+    expect:
+      - a.threat > b.threat - 0.15   # 先讨好并没有换来更宽松的边界

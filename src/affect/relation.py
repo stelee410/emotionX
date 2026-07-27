@@ -149,7 +149,10 @@ PRESETS: dict[RelationType, dict[str, Any]] = {
         "description": "见过几次，谈得来但不深交。",
     },
     RelationType.IDOL: {
-        "intimacy_permitted": 0.35,
+        # 0.45 而非更低：粉丝表达喜爱是这段关系里**最常规**的互动，
+        # 不该触发戒备。偶像关系的特殊之处是**不对称**（power>0 + 硬边界），
+        # 不是亲密上限低。反事实用例 idol__asymmetric_warmth 抓到过这一点。
+        "intimacy_permitted": 0.45,
         "tolerance": 0.20,
         "power": 0.50,  # 被仰慕的一方
         "formality": 0.40,

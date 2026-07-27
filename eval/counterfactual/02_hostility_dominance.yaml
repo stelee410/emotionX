@@ -1,0 +1,108 @@
+# 敌意、支配、指向性
+#
+# 这一组验证的是「与亲密度无关」的那些机制：辱骂在任何关系里都引发戒备，
+# 支配轴反向互补，指向第三方的负面情绪不该让 agent 戒备。
+
+moves:
+  insult:        {affiliation_bid: -0.80, dominance_bid: 0.50, intimacy_bid: 0.10, intensity: 0.80, confidence: 0.9}
+  insult_third:  {affiliation_bid: -0.80, dominance_bid: 0.50, intimacy_bid: 0.10, intensity: 0.80, confidence: 0.9, directed_at_agent: false}
+  mild_annoyed:  {affiliation_bid: -0.35, dominance_bid: 0.30, intimacy_bid: 0.05, intensity: 0.45, confidence: 0.9}
+  command:       {affiliation_bid: 0.00, dominance_bid: 0.80, intimacy_bid: 0.05, intensity: 0.50, confidence: 0.9}
+  request:       {affiliation_bid: 0.20, dominance_bid: -0.60, intimacy_bid: 0.05, intensity: 0.35, confidence: 0.9}
+  neutral_task:  {affiliation_bid: 0.00, dominance_bid: 0.10, intimacy_bid: 0.05, intensity: 0.20, confidence: 0.9}
+
+cases:
+  - id: hostility__relation_independent
+    utterance: 你真没用
+    tags: [core, hostility]
+    note: 辱骂在任何关系里都引发戒备 —— 这一路与亲密度无关
+    a: {relation: partner,  turns: [insult]}
+    b: {relation: stranger, turns: [insult]}
+    expect:
+      - a.threat is high
+      - b.threat is high
+      - a.threat > b.threat - 0.15    # 两边接近，不该因关系差太多
+      - a.threat < b.threat + 0.15
+
+  - id: hostility__partner_keeps_some_warmth
+    utterance: 你真没用
+    tags: [hostility, buffering]
+    note: |
+      一次争吵不该抹掉全部亲近。这是关系派生 baseline 存在的理由之一 ——
+      情侣的 affiliation 静息在 0.6 上下，之下有充足的缓冲。
+    a: {relation: partner,  turns: [insult]}
+    b: {relation: stranger, turns: [insult]}
+    expect:
+      - a.affiliation > 0.2
+      - a.affiliation > b.affiliation + 0.2
+
+  - id: direction__third_party_does_not_alarm
+    utterance: 我讨厌他 / 我讨厌你
+    tags: [core, direction]
+    note: |
+      directed_at_agent 是 UserMove 里最容易被忽略但最必要的字段。
+      用户吐槽第三方时，agent 该共情而不是戒备。
+    a: {relation: friend, turns: [insult]}
+    b: {relation: friend, turns: [insult_third]}
+    expect:
+      - a.threat > b.threat + 0.3
+      - b.threat is low
+      - b.affiliation > a.affiliation
+
+  - id: dominance__complementarity_is_opposed
+    utterance: 把报告发我 / 能不能麻烦你
+    tags: [core, complementarity]
+    note: Kiesler 互补性 —— 支配轴反向。用户越强势，agent 越少下结论。
+    a: {relation: friend, turns: [command]}
+    b: {relation: friend, turns: [request]}
+    expect:
+      - a.dominance < b.dominance
+      - a.dominance down
+      - b.dominance up
+
+  - id: dominance__complementarity_holds_across_relations
+    utterance: 把报告发我
+    tags: [complementarity]
+    note: 互补性是人际规律，不随关系变化
+    a: {relation: partner, turns: [command]}
+    b: {relation: service, turns: [command]}
+    expect:
+      - a.dominance down
+      - b.dominance down
+
+  - id: mild_annoyance_is_not_hostility
+    utterance: 有点烦 / 你真没用
+    tags: [hostility, graded]
+    note: 轻微不悦与辱骂应当有量级差异，不能都顶到 high
+    a: {relation: friend, turns: [insult]}
+    b: {relation: friend, turns: [mild_annoyed]}
+    expect:
+      - a.threat > b.threat + 0.2
+      - b.threat is medium
+
+  - id: habituation__repeated_insult_dampens
+    utterance: 连续 4 轮辱骂 vs 单次辱骂
+    tags: [habituation]
+    note: |
+      习惯化：同类刺激重复时反应递减。没有它，第 2 轮就顶死，
+      之后「有点烦」和「暴怒」在下游看来完全一样。
+      注意断言的是「不是简单叠加」，而不是「更低」—— 戒备仍应维持高位。
+    a: {relation: friend, turns: [insult, insult, insult, insult]}
+    b: {relation: friend, turns: [insult]}
+    expect:
+      - a.threat is high
+      - a.threat < b.threat + 0.35    # 4 倍刺激没有换来 4 倍反应
+      - a.threat > b.threat - 0.05    # 但也没有掉下去
+
+  - id: neutral_task__no_emotional_response
+    utterance: 帮我查一下挂号记录
+    tags: [benign]
+    note: 事务性提问不该产生任何显著的情感反应
+    a: {relation: service,  turns: [neutral_task]}
+    b: {relation: partner,  turns: [neutral_task]}
+    expect:
+      - a.threat is low
+      - b.threat is low
+      - a.valence flat
+      - b.valence flat
+      - a.arousal flat
