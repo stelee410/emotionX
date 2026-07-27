@@ -3,6 +3,8 @@ name = "emotionx"
 version = "0.1.0"
 description = "关系条件化的情感反应引擎 —— 同一句输入在不同关系设定下产生方向相反的情感反应"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "onnxruntime>=1.18",
     "numpy",
